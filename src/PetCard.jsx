@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getDrivePhotoUrl } from './api';
+import { getDrivePhotoUrl, fetchPetContact, hasPetPin, reportPetAdopted } from './api';
 import { getGovernorateName, formatDistance } from './governorates';
 import { DICT, formatTimeAgo, buildWhatsAppUrl } from './i18n';
 import { sharePetCaseNative } from './RescuePosterModal';
@@ -34,6 +34,15 @@ export default function PetCard({
   const [confirming, setConfirming] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
 
+  // WhatsApp on-demand fetch state (number never stored in DOM)
+  const [loadingWhatsApp, setLoadingWhatsApp] = useState(false);
+  const [whatsappError, setWhatsappError] = useState('');
+
+  // Adoption / Moderator report state
+  const [submittingAdoptionAction, setSubmittingAdoptionAction] = useState(false);
+  const [reportedForReview, setReportedForReview] = useState(false);
+  const [adoptionActionError, setAdoptionActionError] = useState('');
+
   // Comments & Follow-up State
   const [comments, setComments] = useState(() => loadPetComments(pet.id));
   const [showComments, setShowComments] = useState(false);
@@ -42,6 +51,8 @@ export default function PetCard({
   const [postingComment, setPostingComment] = useState(false);
   const [commentSuccess, setCommentSuccess] = useState('');
   const [commentError, setCommentError] = useState('');
+
+  const isOwner = hasPetPin(pet.id);
 
   // Keep comments in sync when comments change across components or tabs
   useEffect(() => {
@@ -79,8 +90,7 @@ export default function PetCard({
   const timeAgo = formatTimeAgo(pet.t, lang);
   const distanceLabel = formatDistance(distanceKm, lang);
   const mapsUrl = `https://www.google.com/maps?q=${encodeURIComponent(`${pet.lat},${pet.lng}`)}`;
-  // PRIVACY RULE: never render raw phone number in text/title/tooltip; use only wa.me link on button
-  const whatsappUrl = buildWhatsAppUrl(pet, lang);
+  const hasContact = Boolean(pet.hc);
 
   const cardHeadline =
     condKey === 'healthy'
@@ -90,6 +100,49 @@ export default function PetCard({
   const desc = String(pet.desc || '').trim();
   const isLongDesc = desc.length > TRUNCATE_LENGTH;
   const shownDesc = !isLongDesc || expanded ? desc : desc.slice(0, TRUNCATE_LENGTH) + '…';
+
+  async function handleWhatsAppClick() {
+    if (loadingWhatsApp) return;
+    setWhatsappError('');
+    setLoadingWhatsApp(true);
+    try {
+      const digits = await fetchPetContact(pet.id);
+      const url = buildWhatsAppUrl(pet, lang, digits);
+      if (!url) {
+        throw new Error(t.whatsappFetchError);
+      }
+      const win = window.open(url, '_blank', 'noopener,noreferrer');
+      if (!win) {
+        window.location.href = url;
+      }
+    } catch (_err) {
+      setWhatsappError(t.whatsappFetchError);
+    } finally {
+      setLoadingWhatsApp(false);
+    }
+  }
+
+  async function handleConfirmAdoptionAction() {
+    if (submittingAdoptionAction) return;
+    setAdoptionActionError('');
+    setSubmittingAdoptionAction(true);
+    try {
+      if (isOwner) {
+        if (onMarkAdopted) {
+          await onMarkAdopted(pet);
+        }
+        setConfirming(false);
+      } else {
+        await reportPetAdopted(pet.id, pet.gov);
+        setReportedForReview(true);
+        setConfirming(false);
+      }
+    } catch (err) {
+      setAdoptionActionError((err && err.message) || t.actionFailedError);
+    } finally {
+      setSubmittingAdoptionAction(false);
+    }
+  }
 
   async function handleQuickShare() {
     const res = await sharePetCaseNative(pet, lang);
@@ -364,16 +417,23 @@ export default function PetCard({
           </div>
         )}
 
+        {whatsappError && (
+          <div className="comment-alert comment-alert-error" role="alert">
+            ⚠️ {whatsappError}
+          </div>
+        )}
+
         <div className="pet-actions-row">
-          {whatsappUrl && (
-            <a
-              href={whatsappUrl}
-              target="_blank"
-              rel="noopener noreferrer"
+          {hasContact && (
+            <button
+              type="button"
               className="action-btn btn-whatsapp"
+              onClick={handleWhatsAppClick}
+              disabled={loadingWhatsApp}
             >
-              <span aria-hidden="true">💬</span> {t.openWhatsAppBtn}
-            </a>
+              <span aria-hidden="true">💬</span>{' '}
+              {loadingWhatsApp ? t.openWhatsAppLoading : t.openWhatsAppBtn}
+            </button>
           )}
 
           <a
@@ -410,28 +470,46 @@ export default function PetCard({
         </div>
 
         <div className="pet-card-footer">
-          {!confirming ? (
+          {adoptionActionError && (
+            <div className="comment-alert comment-alert-error" role="alert">
+              ⚠️ {adoptionActionError}
+            </div>
+          )}
+
+          {reportedForReview ? (
+            <div className="comment-alert comment-alert-success" role="status">
+              ✅ {t.reportAdoptedSuccess}
+            </div>
+          ) : !confirming ? (
             <button
               type="button"
               className="btn-adopted"
-              onClick={() => setConfirming(true)}
+              onClick={() => {
+                setAdoptionActionError('');
+                setConfirming(true);
+              }}
             >
-              <span aria-hidden="true">🏡</span> {t.markAdoptedBtn}
+              <span aria-hidden="true">🏡</span>{' '}
+              {isOwner ? t.markAdoptedBtn : t.reportAdoptedBtn}
             </button>
           ) : (
             <div className="confirm-bar">
-              <span className="confirm-text">{t.confirmAdoptedPrompt}</span>
+              <span className="confirm-text">
+                {isOwner ? t.confirmAdoptedPrompt : t.confirmReportAdoptedPrompt}
+              </span>
               <div className="confirm-actions">
                 <button
                   type="button"
                   className="btn-confirm-yes"
-                  onClick={() => onMarkAdopted(pet)}
+                  disabled={submittingAdoptionAction}
+                  onClick={handleConfirmAdoptionAction}
                 >
                   {t.confirmYes}
                 </button>
                 <button
                   type="button"
                   className="btn-confirm-cancel"
+                  disabled={submittingAdoptionAction}
                   onClick={() => setConfirming(false)}
                 >
                   {t.confirmCancel}

@@ -1,25 +1,61 @@
 const SAVED_PETS_KEY = 'sp_saved_pets_v1';
 
 /**
+ * Strip any legacy phone number (`contact`) from a pet object before storing or returning.
+ * Preserves boolean `hc` (has contact) so the WhatsApp button still renders.
+ */
+function sanitizeSavedPet(pet) {
+  if (!pet || typeof pet !== 'object') return null;
+  const copy = { ...pet };
+  if ('contact' in copy) {
+    if (copy.hc === undefined) {
+      copy.hc = Boolean(String(copy.contact || '').replace(/\D+/g, ''));
+    }
+    delete copy.contact;
+  } else {
+    copy.hc = Boolean(copy.hc);
+  }
+  return copy;
+}
+
+/**
  * Load all saved/bookmarked pet objects from localStorage.
+ * Automatically strips `contact` from entries saved by older versions.
  */
 export function loadSavedPets() {
   try {
     const raw = localStorage.getItem(SAVED_PETS_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+    let hadLegacyContact = false;
+    const sanitized = [];
+    for (const item of parsed) {
+      if (item && typeof item === 'object' && item.id) {
+        if ('contact' in item) {
+          hadLegacyContact = true;
+        }
+        sanitized.push(sanitizeSavedPet(item));
+      }
+    }
+    if (hadLegacyContact) {
+      saveBookmarkedPets(sanitized);
+    }
+    return sanitized;
   } catch (_e) {
     return [];
   }
 }
 
 /**
- * Persist saved pets array to localStorage.
+ * Persist saved pets array to localStorage (always stripped of contact numbers).
  */
 export function saveBookmarkedPets(pets) {
   try {
-    localStorage.setItem(SAVED_PETS_KEY, JSON.stringify(pets));
+    const cleanList = Array.isArray(pets)
+      ? pets.map(sanitizeSavedPet).filter(Boolean)
+      : [];
+    localStorage.setItem(SAVED_PETS_KEY, JSON.stringify(cleanList));
   } catch (_e) {
     // Ignore storage quota errors
   }
@@ -31,9 +67,10 @@ export function saveBookmarkedPets(pets) {
 export function toggleSavedPet(currentList, pet) {
   if (!pet || !pet.id) return currentList;
   const exists = currentList.some((item) => item.id === pet.id);
+  const cleanPet = sanitizeSavedPet(pet);
   const next = exists
     ? currentList.filter((item) => item.id !== pet.id)
-    : [pet, ...currentList];
+    : [cleanPet, ...currentList];
   saveBookmarkedPets(next);
   return next;
 }

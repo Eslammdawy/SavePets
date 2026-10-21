@@ -1,8 +1,8 @@
 /**
  * Single networking & caching module (api.js)
  *
- * - Production endpoints: GET /api/list?gov=... and POST /api/post
- * - Local dev fallback only: VITE_GAS_URL
+ * - Production endpoints: GET /api/list?gov=..., GET /api/contact?id=..., and POST /api/post
+ * - Local dev fallback only (when import.meta.env.DEV is true): VITE_GAS_URL
  * - Two-level client cache keyed by governorate only:
  *     1) In-memory Map with timestamps
  *     2) sessionStorage as backup
@@ -13,44 +13,117 @@
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const SESSION_PREFIX = 'sp_gov_cache_v1_';
 const CLIENT_ID_KEY = 'sp_client_id_v1';
+const REPORTER_PINS_KEY = 'sp_reporter_pins_v1';
 
 // Level 1: In-memory Map<gov, { ts: number, items: Array<Pet> }>
 const memoryCache = new Map();
 
 /**
- * Get or generate a persistent random client ID in localStorage for server rate-limiting.
+ * Generate a UUID v4 with fallback.
+ */
+export function generateUuid() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+/**
+ * Get or generate a persistent random client ID in localStorage.
  */
 export function getClientId() {
   try {
     let id = localStorage.getItem(CLIENT_ID_KEY);
     if (!id) {
-      id =
-        'sp_' +
-        Math.random().toString(36).slice(2, 11) +
-        '_' +
-        Date.now().toString(36);
+      id = 'sp_' + generateUuid();
       localStorage.setItem(CLIENT_ID_KEY, id);
     }
     return id;
   } catch (_e) {
-    return 'sp_anon_' + Math.random().toString(36).slice(2, 10);
+    return 'sp_anon_' + generateUuid();
   }
 }
 
 /**
- * Determine base endpoints. Uses VITE_GAS_URL when configured (allowing direct
- * static `dist` uploads), or falls back to /api/list and /api/post edge functions.
+ * Load stored reporter PINs map { [petId]: pin } from localStorage.
  */
+function loadPinsMap() {
+  try {
+    const raw = localStorage.getItem(REPORTER_PINS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (_e) {
+    return {};
+  }
+}
+
+/**
+ * Save a 4-digit reporter PIN for a pet ID on this device.
+ */
+export function savePetPin(petId, pin) {
+  if (!petId || !pin) return;
+  try {
+    const map = loadPinsMap();
+    map[String(petId)] = String(pin).trim();
+    localStorage.setItem(REPORTER_PINS_KEY, JSON.stringify(map));
+  } catch (_e) {
+    // Ignore storage errors
+  }
+}
+
+/**
+ * Get the stored 4-digit reporter PIN for a pet ID on this device, or ''.
+ */
+export function getPetPin(petId) {
+  if (!petId) return '';
+  const map = loadPinsMap();
+  return String(map[String(petId)] || '');
+}
+
+/**
+ * Return true if this device owns the pet report (has its 4-digit PIN stored).
+ */
+export function hasPetPin(petId) {
+  return /^\d{4}$/.test(getPetPin(petId));
+}
+
+/**
+ * Return VITE_GAS_URL only during local development (`import.meta.env.DEV`).
+ * Never use VITE_GAS_URL in production builds.
+ */
+function getDevGasUrl() {
+  if (!import.meta.env || !import.meta.env.DEV) {
+    return '';
+  }
+  return (import.meta.env.VITE_GAS_URL || '').trim();
+}
+
 function getListUrl(gov) {
-  const gasUrl = (import.meta.env.VITE_GAS_URL || '').trim();
+  const gasUrl = getDevGasUrl();
   if (gasUrl) {
     return `${gasUrl}?action=list&gov=${encodeURIComponent(gov)}`;
   }
   return `/api/list?gov=${encodeURIComponent(gov)}`;
 }
 
+function getContactUrl(petId) {
+  const gasUrl = getDevGasUrl();
+  if (gasUrl) {
+    const devSecret = (import.meta.env.VITE_EDGE_SHARED_SECRET || '').trim();
+    return `${gasUrl}?action=contact&id=${encodeURIComponent(petId)}&_ip=${encodeURIComponent(
+      getClientId()
+    )}&_secret=${encodeURIComponent(devSecret)}`;
+  }
+  return `/api/contact?id=${encodeURIComponent(petId)}`;
+}
+
 function getPostUrl() {
-  const gasUrl = (import.meta.env.VITE_GAS_URL || '').trim();
+  const gasUrl = getDevGasUrl();
   if (gasUrl) {
     return gasUrl;
   }
@@ -59,8 +132,9 @@ function getPostUrl() {
 
 /**
  * Rebuild array of pet objects from compact { h, r } response.
+ * Never exposes `contact` digits on pet objects; sets boolean `hc` instead.
  */
-function expandCompactResponse(data) {
+export function expandCompactResponse(data) {
   if (!data || !Array.isArray(data.h) || !Array.isArray(data.r)) {
     return [];
   }
@@ -69,6 +143,14 @@ function expandCompactResponse(data) {
     const obj = {};
     for (let i = 0; i < headers.length; i++) {
       obj[headers[i]] = row[i];
+    }
+    if ('contact' in obj) {
+      if (obj.hc === undefined) {
+        obj.hc = Boolean(String(obj.contact || '').replace(/\D+/g, ''));
+      }
+      delete obj.contact;
+    } else {
+      obj.hc = Boolean(obj.hc);
     }
     return obj;
   });
@@ -95,7 +177,6 @@ export function getFreshCachedList(gov) {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed.ts === 'number' && Array.isArray(parsed.items)) {
         if (now - parsed.ts < CACHE_TTL_MS) {
-          // Promote back into memory cache
           memoryCache.set(gov, parsed);
           return parsed.items;
         }
@@ -174,14 +255,35 @@ export async function fetchPetsByGovernorate(gov) {
 }
 
 /**
+ * Fetch the contact phone number digits for a single pet ID on explicit user click.
+ * Never cached.
+ */
+export async function fetchPetContact(petId) {
+  if (!petId) {
+    throw new Error('Missing pet ID.');
+  }
+
+  const res = await fetch(getContactUrl(petId), {
+    method: 'GET',
+    cache: 'no-store'
+  });
+
+  const json = await res.json();
+  if (!res.ok || !json || !json.ok || !json.contact) {
+    throw new Error((json && json.error) || 'Failed to load contact number.');
+  }
+
+  return String(json.contact).replace(/\D+/g, '');
+}
+
+/**
  * Submit a new pet report.
  * Sends Content-Type: text/plain;charset=utf-8 to avoid CORS preflight.
- * Invalidates the affected governorate's client cache on success.
+ * Invalidates the affected governorate's client cache on success and stores the returned PIN.
  */
 export async function submitPetReport(payload) {
   const bodyObj = {
     action: 'add',
-    clientId: getClientId(),
     ...payload
   };
 
@@ -195,7 +297,14 @@ export async function submitPetReport(payload) {
 
   const json = await res.json();
   if (!res.ok || !json || !json.ok) {
-    throw new Error((json && json.error) || 'Failed to submit report.');
+    const err = new Error((json && json.error) || 'Failed to submit report.');
+    if (json && json.code) err.code = json.code;
+    err.status = res.status;
+    throw err;
+  }
+
+  if (json.id && json.pin) {
+    savePetPin(json.id, json.pin);
   }
 
   if (payload.gov) {
@@ -206,13 +315,12 @@ export async function submitPetReport(payload) {
 }
 
 /**
- * Mark a pet as adopted/rescued in the background.
- * Uses Content-Type: text/plain;charset=utf-8.
+ * Mark a pet as adopted/rescued using the reporter's 4-digit PIN.
  */
-export async function markPetAdopted(petId, gov) {
-  // Immediately update/drop local cache
-  if (gov) {
-    removePetFromClientCache(gov, petId);
+export async function markPetAdopted(petId, gov, pin = '') {
+  const resolvedPin = String(pin || getPetPin(petId) || '').trim();
+  if (!/^\d{4}$/.test(resolvedPin)) {
+    throw new Error('Missing or invalid 4-digit reporter PIN.');
   }
 
   const res = await fetch(getPostUrl(), {
@@ -222,7 +330,8 @@ export async function markPetAdopted(petId, gov) {
     },
     body: JSON.stringify({
       action: 'markAdopted',
-      id: petId
+      id: petId,
+      pin: resolvedPin
     })
   });
 
@@ -232,7 +341,33 @@ export async function markPetAdopted(petId, gov) {
   }
 
   if (gov) {
+    removePetFromClientCache(gov, petId);
     invalidateGovCache(gov);
+  }
+
+  return json;
+}
+
+/**
+ * Report a pet case as adopted/rescued for moderator review (for visitors without the PIN).
+ * Does NOT alter the pet's status or remove it from the active list.
+ */
+export async function reportPetAdopted(petId, gov = '') {
+  const res = await fetch(getPostUrl(), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'text/plain;charset=utf-8'
+    },
+    body: JSON.stringify({
+      action: 'reportAdopted',
+      id: petId,
+      gov
+    })
+  });
+
+  const json = await res.json();
+  if (!res.ok || !json || !json.ok) {
+    throw new Error((json && json.error) || 'Failed to submit adoption report.');
   }
 
   return json;
@@ -255,7 +390,6 @@ export async function submitComment(payload) {
   try {
     const bodyObj = {
       action: 'addComment',
-      clientId: getClientId(),
       ...payload
     };
 
@@ -273,4 +407,3 @@ export async function submitComment(payload) {
     return { ok: false, offline: true, error: (err && err.message) || String(err) };
   }
 }
-

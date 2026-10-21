@@ -45,6 +45,9 @@ export const DICT = {
     submitBtn: 'نشر البلاغ الآن',
     submittingBtn: 'جاري نشر البلاغ...',
     submitSuccess: 'تم نشر البلاغ بنجاح! شكراً لمبادرتك في إنقاذ روح.',
+    pinIssuedTitle: 'احتفظ برقم البلاغ السري (PIN)',
+    pinIssuedNote: (pin) =>
+      `الرقم السري لبلاغك هو ${pin}. احتفظ به لإغلاق البلاغ عند إنقاذ الحيوان أو تبنيه (تم حفظه تلقائياً على هذا الجهاز).`,
     validationRequired: 'يرجى استكمال الصورة، وتحديد الموقع (GPS)، والمحافظة.',
     validationContact: 'يرجى إدخال رقم واتساب صحيح مع كود الدولة (8 إلى 15 رقماً).',
 
@@ -92,8 +95,14 @@ export const DICT = {
     readLess: 'عرض أقل',
     openMapsBtn: 'الموقع على الخريطة',
     openWhatsAppBtn: 'تواصل واتساب',
+    openWhatsAppLoading: 'جاري التحميل...',
+    whatsappFetchError: 'تعذر جلب رقم التواصل حالياً. حاول مرة أخرى.',
     markAdoptedBtn: 'تم الإنقاذ أو التبني بفضل الله',
     confirmAdoptedPrompt: 'تأكيد أنه تم إنقاذه أو تبنيه؟',
+    reportAdoptedBtn: 'إبلاغ أنه تم الإنقاذ / التبني',
+    confirmReportAdoptedPrompt: 'إرسال إشعار للمشرفين بأنه تم إنقاذه أو تبنيه؟',
+    reportAdoptedSuccess: 'تم إرسال الإشعار للمراجعة. شكراً لمساعدتك!',
+    actionFailedError: 'تعذر تنفيذ العملية حالياً. يرجى المحاولة لاحقاً.',
     confirmYes: 'نعم، تأكيد',
     confirmCancel: 'إلغاء',
 
@@ -223,6 +232,9 @@ export const DICT = {
     submitBtn: 'Publish Rescue Report',
     submittingBtn: 'Publishing report...',
     submitSuccess: 'Pet report shared successfully! Thank you for helping save a life.',
+    pinIssuedTitle: 'Save your 4-digit reporter PIN',
+    pinIssuedNote: (pin) =>
+      `Your report PIN is ${pin}. Save this code to close the case once rescued (also saved on this device).`,
     validationRequired: 'Photo, GPS location, and governorate are required.',
     validationContact: 'Please enter a valid WhatsApp number with country code (8–15 digits).',
 
@@ -270,8 +282,14 @@ export const DICT = {
     readLess: 'Show less',
     openMapsBtn: 'View on Maps',
     openWhatsAppBtn: 'WhatsApp Chat',
+    openWhatsAppLoading: 'Loading...',
+    whatsappFetchError: 'Could not load contact number right now. Please try again.',
     markAdoptedBtn: 'Mark as Rescued / Adopted',
     confirmAdoptedPrompt: 'Confirm this pet was rescued/adopted?',
+    reportAdoptedBtn: 'Report as Rescued / Adopted',
+    confirmReportAdoptedPrompt: 'Notify moderators that this pet was rescued or adopted?',
+    reportAdoptedSuccess: 'Reported for moderator review. Thank you!',
+    actionFailedError: 'Action could not be completed. Please try again.',
     confirmYes: 'Yes, confirm',
     confirmCancel: 'Cancel',
 
@@ -400,7 +418,7 @@ export function buildAutoSummary(pet, lang = 'ar') {
   const typeLabel = (t.types[pet.type] || pet.type || '').toLowerCase();
   const condLabel = t.conditions[pet.cond] || pet.cond || '';
   const timeAgo = formatTimeAgo(pet.t, lang);
-  const hasContact = Boolean(pet.contact);
+  const hasContact = Boolean(pet.hc || pet.contact);
 
   if (lang === 'ar') {
     const locText = hasDistinctCity ? `${cityText}، ${govName}` : govName;
@@ -419,10 +437,11 @@ export function buildAutoSummary(pet, lang = 'ar') {
 
 /**
  * Build prefilled WhatsApp message mentioning the pet's city and animal type.
+ * Phone digits are passed explicitly after an on-demand fetch so they never live on the pet object.
  */
-export function buildWhatsAppUrl(pet, lang = 'ar') {
-  if (!pet.contact) return '';
-  const digits = String(pet.contact).replace(/\D+/g, '');
+export function buildWhatsAppUrl(pet, lang = 'ar', contactDigits = '') {
+  const raw = contactDigits || (pet && pet.contact) || '';
+  const digits = String(raw).replace(/\D+/g, '');
   if (!digits) return '';
 
   const t = DICT[lang] || DICT.en;

@@ -5,7 +5,7 @@ import {
   calculateDistanceKm
 } from './governorates';
 import { DICT } from './i18n';
-import { fetchPetsByGovernorate, markPetAdopted } from './api';
+import { fetchPetsByGovernorate, markPetAdopted, getPetPin } from './api';
 import {
   loadSavedPets,
   toggleSavedPet,
@@ -212,15 +212,11 @@ export default function AdoptView({ lang, adoptTrigger = 0, petAddedEvent = null
     await runSearchForGov(selectedGov, cityInput, typeInput);
   }
 
-  function handleMarkAdopted(pet) {
-    // 1. Optimistically remove from local state and saved bookmarks immediately
+  async function handleMarkAdopted(pet) {
+    const pin = getPetPin(pet.id);
+    await markPetAdopted(pet.id, pet.gov, pin);
     setGovPets((prev) => prev.filter((item) => item.id !== pet.id));
     setSavedPets((prev) => removeSavedPetById(prev, pet.id));
-
-    // 2. Remove from memory + sessionStorage cache and send POST in background
-    markPetAdopted(pet.id, pet.gov).catch(() => {
-      // Background errors are non-blocking per spec
-    });
   }
 
   // Choose base source: either the user's saved bookmarks across all governorates, or the loaded governorate list

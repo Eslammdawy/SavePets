@@ -46,6 +46,7 @@ export default function ShareView({ lang, onPetAdded, onOpenFirstAid }) {
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  const [submittedPin, setSubmittedPin] = useState('');
 
   async function handleFileChange(e) {
     const file = e.target.files && e.target.files[0];
@@ -53,6 +54,7 @@ export default function ShareView({ lang, onPetAdded, onOpenFirstAid }) {
 
     setErrorMsg('');
     setSuccessMsg('');
+    setSubmittedPin('');
     setCompressing(true);
 
     try {
@@ -143,6 +145,7 @@ export default function ShareView({ lang, onPetAdded, onOpenFirstAid }) {
     e.preventDefault();
     setErrorMsg('');
     setSuccessMsg('');
+    setSubmittedPin('');
 
     const trimmedCity = city.trim();
     if (!photoData || !gov) {
@@ -190,15 +193,18 @@ export default function ShareView({ lang, onPetAdded, onOpenFirstAid }) {
 
     setSubmitting(true);
     try {
-      await submitPetReport(payload);
+      const res = await submitPetReport(payload);
 
       const submittedGov = gov;
       resetFormFields();
       setSuccessMsg(t.submitSuccess);
+      if (res && res.pin) {
+        setSubmittedPin(String(res.pin));
+      }
       scrollToTop();
 
       if (onPetAdded) {
-        onPetAdded(submittedGov);
+        onPetAdded(submittedGov, payload, res);
       }
     } catch (err) {
       const isNetworkFailure =
@@ -245,7 +251,17 @@ export default function ShareView({ lang, onPetAdded, onOpenFirstAid }) {
         {successMsg && (
           <div className="alert-box alert-success" role="status">
             <span aria-hidden="true">🎉</span>
-            <span>{successMsg}</span>
+            <div>
+              <div>{successMsg}</div>
+              {submittedPin && (
+                <div className="pin-issued-box">
+                  <div className="pin-issued-title">
+                    🔑 {t.pinIssuedTitle}: <strong dir="ltr">{submittedPin}</strong>
+                  </div>
+                  <div className="pin-issued-sub">{t.pinIssuedNote(submittedPin)}</div>
+                </div>
+              )}
+            </div>
           </div>
         )}
 

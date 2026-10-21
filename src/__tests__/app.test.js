@@ -3,9 +3,11 @@ import {
   matchGovernorateId,
   findNearestGovernorateId,
   calculateDistanceKm,
-  formatDistance
+  formatDistance,
+  hasValidCoords
 } from '../governorates';
-import { formatTimeAgo } from '../i18n';
+import { formatTimeAgo, buildPetMapsUrl } from '../i18n';
+import { buildPetFromSubmission } from '../api';
 import { safeText, fromSafeText } from '../sanitize';
 import {
   enqueueOfflineReport,
@@ -75,6 +77,31 @@ describe('governorates utilities', () => {
     expect(formatDistance(3.45, 'en')).toBe('3.5 km away');
     expect(formatDistance(25.4, 'en')).toBe('25 km away');
     expect(formatDistance(null, 'en')).toBe('');
+  });
+
+  it('handles optional GPS coordinates (null / empty) cleanly', () => {
+    expect(hasValidCoords({ lat: 30.0444, lng: 31.2357 })).toBe(true);
+    expect(hasValidCoords({ lat: null, lng: null })).toBe(false);
+    expect(hasValidCoords({ lat: '', lng: '' })).toBe(false);
+    expect(hasValidCoords({ lat: 0, lng: 0 })).toBe(false);
+    expect(calculateDistanceKm(30.0444, 31.2357, null, null)).toBeNull();
+    expect(calculateDistanceKm(30.0444, 31.2357, '', '')).toBeNull();
+
+    const manualPet = buildPetFromSubmission(
+      { gov: 'cairo', city: 'Maadi', lat: null, lng: null, type: 'cat', cond: 'healthy' },
+      { id: 'pet-manual-1', photo: 'photo-1' }
+    );
+    expect(manualPet.lat).toBeNull();
+    expect(manualPet.lng).toBeNull();
+    expect(buildPetMapsUrl(manualPet, 'en')).toContain(encodeURIComponent('Maadi, Cairo, Egypt'));
+
+    const gpsPet = buildPetFromSubmission(
+      { gov: 'cairo', city: 'Maadi', lat: 29.9602, lng: 31.2569, type: 'dog', cond: 'injured' },
+      { id: 'pet-gps-1', photo: 'photo-2' }
+    );
+    expect(gpsPet.lat).toBeCloseTo(29.9602, 4);
+    expect(gpsPet.lng).toBeCloseTo(31.2569, 4);
+    expect(buildPetMapsUrl(gpsPet, 'en')).toContain(encodeURIComponent('29.9602,31.2569'));
   });
 });
 

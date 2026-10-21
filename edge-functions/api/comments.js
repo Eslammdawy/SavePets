@@ -7,10 +7,12 @@
  */
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const DEFAULT_GAS_URL =
+  'https://script.google.com/macros/s/AKfycbzdWqhulLBedqA5wM7hcBMom3RSIGAcqFSLMcOC1xMSW8kQU9FcfqYmNO_AhbB05qZB/exec';
 
 export async function onRequestGet(context) {
   const { request, env } = context;
-  const gasUrl = env && env.GAS_URL;
+  const gasUrl = (env && env.GAS_URL) || DEFAULT_GAS_URL;
 
   if (!gasUrl) {
     return new Response(
@@ -109,3 +111,5 @@ export async function onRequest(context) {
     }
   });
 }
+
+export default onRequest;

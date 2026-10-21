@@ -85,9 +85,39 @@ export function findNearestGovernorateId(lat, lng) {
 }
 
 /**
+ * Check whether an object or coordinate pair has valid non-zero GPS coordinates within Egypt's region.
+ */
+export function hasValidCoords(obj) {
+  if (!obj || typeof obj !== 'object') return false;
+  if (obj.lat === null || obj.lat === undefined || obj.lat === '') return false;
+  if (obj.lng === null || obj.lng === undefined || obj.lng === '') return false;
+  const lat = Number(obj.lat);
+  const lng = Number(obj.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+  if (lat === 0 && lng === 0) return false;
+  return lat >= 21.5 && lat <= 32.0 && lng >= 24.5 && lng <= 37.0;
+}
+
+/**
  * Calculate great-circle distance in kilometers between two GPS points using the Haversine formula.
  */
 export function calculateDistanceKm(lat1, lng1, lat2, lng2) {
+  if (
+    lat1 === null ||
+    lat1 === undefined ||
+    lat1 === '' ||
+    lng1 === null ||
+    lng1 === undefined ||
+    lng1 === '' ||
+    lat2 === null ||
+    lat2 === undefined ||
+    lat2 === '' ||
+    lng2 === null ||
+    lng2 === undefined ||
+    lng2 === ''
+  ) {
+    return null;
+  }
   const nLat1 = Number(lat1);
   const nLng1 = Number(lng1);
   const nLat2 = Number(lat2);
@@ -96,7 +126,9 @@ export function calculateDistanceKm(lat1, lng1, lat2, lng2) {
     !Number.isFinite(nLat1) ||
     !Number.isFinite(nLng1) ||
     !Number.isFinite(nLat2) ||
-    !Number.isFinite(nLng2)
+    !Number.isFinite(nLng2) ||
+    (nLat1 === 0 && nLng1 === 0) ||
+    (nLat2 === 0 && nLng2 === 0)
   ) {
     return null;
   }

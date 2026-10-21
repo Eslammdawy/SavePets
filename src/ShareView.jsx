@@ -26,6 +26,7 @@ const CONDITION_OPTIONS = [
 export default function ShareView({ lang, onPetAdded, onOpenFirstAid }) {
   const t = DICT[lang] || DICT.en;
   const fileInputRef = useRef(null);
+  const cameraInputRef = useRef(null);
 
   const [photoData, setPhotoData] = useState(null); // { base64, dataUrl, mimeType, sizeBytes }
   const [compressing, setCompressing] = useState(false);
@@ -49,7 +50,8 @@ export default function ShareView({ lang, onPetAdded, onOpenFirstAid }) {
   const [submittedPin, setSubmittedPin] = useState('');
 
   async function handleFileChange(e) {
-    const file = e.target.files && e.target.files[0];
+    const inputEl = e.target;
+    const file = inputEl && inputEl.files && inputEl.files[0];
     if (!file) return;
 
     setErrorMsg('');
@@ -65,6 +67,9 @@ export default function ShareView({ lang, onPetAdded, onOpenFirstAid }) {
       setPhotoData(null);
     } finally {
       setCompressing(false);
+      if (inputEl) {
+        inputEl.value = '';
+      }
     }
   }
 
@@ -131,7 +136,11 @@ export default function ShareView({ lang, onPetAdded, onOpenFirstAid }) {
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
+    if (cameraInputRef.current) {
+      cameraInputRef.current.value = '';
+    }
     setCoords(null);
+    setLocationError('');
     setGov('');
     setCity('');
     setAnimalType('dog');
@@ -154,12 +163,6 @@ export default function ShareView({ lang, onPetAdded, onOpenFirstAid }) {
       return;
     }
 
-    if (!coords || typeof coords.lat !== 'number' || typeof coords.lng !== 'number') {
-      setErrorMsg(t.locationRequiredError);
-      scrollToTop();
-      return;
-    }
-
     const cleanContact = normalizeContactDigits(contact);
     if (cleanContact && (cleanContact.length < 8 || cleanContact.length > 15)) {
       setErrorMsg(t.validationContact);
@@ -167,13 +170,20 @@ export default function ShareView({ lang, onPetAdded, onOpenFirstAid }) {
       return;
     }
 
+    const hasCoords =
+      coords &&
+      typeof coords.lat === 'number' &&
+      typeof coords.lng === 'number' &&
+      Number.isFinite(coords.lat) &&
+      Number.isFinite(coords.lng);
+
     const finalCity = trimmedCity || getGovernorateName(gov, lang);
     const payload = {
       id: generateUuid(),
       gov,
       city: finalCity,
-      lat: coords.lat,
-      lng: coords.lng,
+      lat: hasCoords ? coords.lat : null,
+      lng: hasCoords ? coords.lng : null,
       type: animalType,
       cond: condition,
       desc: desc.trim().slice(0, 300),
@@ -288,18 +298,28 @@ export default function ShareView({ lang, onPetAdded, onOpenFirstAid }) {
             {/* Photo Dropzone / Preview */}
             <div className="form-group">
               <span className="form-label">{t.photoLabel}</span>
+              {/* Hidden input for live camera capture */}
               <input
-                ref={fileInputRef}
-                id="pet-photo-input"
+                ref={cameraInputRef}
+                id="pet-camera-input"
                 type="file"
                 accept="image/*"
                 capture="environment"
                 className="file-input-hidden"
                 onChange={handleFileChange}
               />
+              {/* Hidden input for uploading from phone gallery / file picker */}
+              <input
+                ref={fileInputRef}
+                id="pet-photo-input"
+                type="file"
+                accept="image/*"
+                className="file-input-hidden"
+                onChange={handleFileChange}
+              />
 
               {!photoData ? (
-                <label className="photo-dropzone" htmlFor="pet-photo-input">
+                <div className="photo-dropzone">
                   <span className="dropzone-icon-circle" aria-hidden="true">
                     📷
                   </span>
@@ -307,7 +327,24 @@ export default function ShareView({ lang, onPetAdded, onOpenFirstAid }) {
                     {compressing ? t.photoCompressing : t.photoBtn}
                   </span>
                   <span className="dropzone-hint">{t.photoHint}</span>
-                </label>
+
+                  <div className="photo-source-actions">
+                    <label
+                      className="photo-source-btn is-camera"
+                      htmlFor="pet-camera-input"
+                    >
+                      <span aria-hidden="true">📷</span>
+                      <span>{t.photoCameraBtn}</span>
+                    </label>
+                    <label
+                      className="photo-source-btn is-gallery"
+                      htmlFor="pet-photo-input"
+                    >
+                      <span aria-hidden="true">🖼️</span>
+                      <span>{t.photoGalleryBtn}</span>
+                    </label>
+                  </div>
+                </div>
               ) : (
                 <div className="photo-preview-box">
                   <img
@@ -319,62 +356,23 @@ export default function ShareView({ lang, onPetAdded, onOpenFirstAid }) {
                     <span className="photo-size-pill">
                       ✨ {photoData.mimeType === 'image/webp' ? 'WebP' : 'JPEG'} • {sizeKb} KB
                     </span>
-                    <label className="photo-retake-btn" htmlFor="pet-photo-input">
-                      📷 {t.photoChangeBtn}
-                    </label>
+                    <div className="photo-retake-actions">
+                      <label className="photo-retake-btn" htmlFor="pet-camera-input">
+                        <span aria-hidden="true">📷</span>
+                        <span>{t.photoRetakeCameraBtn}</span>
+                      </label>
+                      <label className="photo-retake-btn" htmlFor="pet-photo-input">
+                        <span aria-hidden="true">🖼️</span>
+                        <span>{t.photoRetakeGalleryBtn}</span>
+                      </label>
+                    </div>
                   </div>
                 </div>
               )}
             </div>
 
-            {/* GPS Location Capture */}
-            <div className="form-group">
-              <span className="form-label">{t.locationLabel}</span>
-              <div className="location-box">
-                {!coords ? (
-                  <button
-                    type="button"
-                    className="btn-gps-trigger"
-                    onClick={handleGetLocation}
-                    disabled={locating}
-                  >
-                    <span className="gps-icon-pulse" aria-hidden="true">📍</span>
-                    <span>{locating ? t.locating : t.useMyLocation}</span>
-                  </button>
-                ) : (
-                  <div className="location-status">
-                    <div className="location-status-info">
-                      <span className="location-check" aria-hidden="true">✅</span>
-                      <div>
-                        <div className="location-status-title">{t.locationCaptured}</div>
-                        <div className="location-coords" dir="ltr">
-                          {coords.lat}, {coords.lng}
-                          {detectingAddress ? ` — ${t.detectingAddress}` : ''}
-                        </div>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      className="btn-location-refresh"
-                      onClick={handleGetLocation}
-                      disabled={locating || detectingAddress}
-                    >
-                      🔄 {t.locationUpdate}
-                    </button>
-                  </div>
-                )}
-
-                {locationError && (
-                  <div className="alert-box alert-error" role="alert">
-                    <span aria-hidden="true">⚠️</span>
-                    <span>{locationError}</span>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Governorate & City */}
-            <div className="form-row-2">
+            {/* Governorate & City (Manual selection always available) */}
+            <div className="form-row-2" style={{ marginBottom: '16px' }}>
               <div className="form-group" style={{ marginBottom: 0 }}>
                 <label className="form-label" htmlFor="share-gov">
                   {t.govLabel}
@@ -408,6 +406,69 @@ export default function ShareView({ lang, onPetAdded, onOpenFirstAid }) {
                   value={city}
                   onChange={(e) => setCity(e.target.value)}
                 />
+              </div>
+            </div>
+
+            {/* Optional GPS Location Capture */}
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <span className="form-label">{t.locationLabel}</span>
+              <div className="location-box">
+                {!coords ? (
+                  <button
+                    type="button"
+                    className="btn-gps-trigger"
+                    onClick={handleGetLocation}
+                    disabled={locating}
+                  >
+                    <span className="gps-icon-pulse" aria-hidden="true">📍</span>
+                    <span>{locating ? t.locating : t.useMyLocation}</span>
+                  </button>
+                ) : (
+                  <div className="location-status">
+                    <div className="location-status-info">
+                      <span className="location-check" aria-hidden="true">✅</span>
+                      <div>
+                        <div className="location-status-title">{t.locationCaptured}</div>
+                        <div className="location-coords" dir="ltr">
+                          {coords.lat}, {coords.lng}
+                          {detectingAddress ? ` — ${t.detectingAddress}` : ''}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="location-status-actions">
+                      <button
+                        type="button"
+                        className="btn-location-refresh"
+                        onClick={handleGetLocation}
+                        disabled={locating || detectingAddress}
+                      >
+                        🔄 {t.locationUpdate}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-location-clear"
+                        onClick={() => {
+                          setCoords(null);
+                          setLocationError('');
+                        }}
+                        disabled={locating || detectingAddress}
+                      >
+                        ✕ {t.locationClear}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <p className="form-field-hint" style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: 0 }}>
+                  💡 {t.locationOptionalHint}
+                </p>
+
+                {locationError && (
+                  <div className="alert-box alert-error" role="alert" style={{ marginBottom: 0 }}>
+                    <span aria-hidden="true">⚠️</span>
+                    <span>{locationError}</span>
+                  </div>
+                )}
               </div>
             </div>
           </div>

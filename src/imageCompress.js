@@ -14,7 +14,14 @@ const INITIAL_QUALITY = 0.6;
 const MIN_QUALITY = 0.3;
 
 export async function compressImageFile(file) {
-  if (!file || !file.type || !file.type.startsWith('image/')) {
+  if (!file) {
+    throw new Error('Invalid image file.');
+  }
+  const hasImageMime = Boolean(file.type && file.type.startsWith('image/'));
+  const hasImageExt = Boolean(
+    file.name && /\.(jpe?g|png|webp|gif|bmp|heic|heif|avif)$/i.test(file.name)
+  );
+  if (!hasImageMime && !hasImageExt) {
     throw new Error('Invalid image file.');
   }
 

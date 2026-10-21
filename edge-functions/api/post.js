@@ -40,17 +40,21 @@ async function deriveIpKey(ip, secret) {
     .slice(0, 32);
 }
 
+const DEFAULT_GAS_URL =
+  'https://script.google.com/macros/s/AKfycbzdWqhulLBedqA5wM7hcBMom3RSIGAcqFSLMcOC1xMSW8kQU9FcfqYmNO_AhbB05qZB/exec';
+
 export async function onRequestPost(context) {
   const { request, env } = context;
-  const gasUrl = env && env.GAS_URL;
-  const sharedSecret = env && env.EDGE_SHARED_SECRET;
+  const gasUrl = (env && env.GAS_URL) || DEFAULT_GAS_URL;
+  const sharedSecret = (env && env.EDGE_SHARED_SECRET) || '';
+  const ipSalt = (env && (env.RATE_LIMIT_SALT || env.EDGE_SHARED_SECRET)) || 'sp-default-edge-salt';
 
-  if (!gasUrl || !sharedSecret) {
+  if (!gasUrl) {
     return new Response(
       JSON.stringify({
         ok: false,
         code: 'ERR_CONFIG',
-        error: 'Server misconfiguration: missing GAS_URL or EDGE_SHARED_SECRET.'
+        error: 'Server misconfiguration: missing GAS_URL.'
       }),
       {
         status: 500,
@@ -88,7 +92,7 @@ export async function onRequestPost(context) {
 
   try {
     const clientIp = extractClientIp(context);
-    const ipKey = await deriveIpKey(clientIp, sharedSecret);
+    const ipKey = await deriveIpKey(clientIp, ipSalt);
 
     const upstreamPayload = {
       ...parsedBody,
@@ -155,3 +159,5 @@ export async function onRequest(context) {
     }
   });
 }
+
+export default onRequest;

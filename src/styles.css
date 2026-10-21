@@ -531,6 +531,56 @@ button.action-btn:focus-visible,
   max-width: 340px;
 }
 
+.photo-source-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  margin-top: 8px;
+}
+
+.photo-source-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 16px;
+  border-radius: 12px;
+  font-size: 0.9rem;
+  font-weight: 800;
+  cursor: pointer;
+  flex: 1 1 160px;
+  max-width: 240px;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.photo-source-btn.is-camera {
+  background: var(--primary-gradient);
+  color: #ffffff;
+  border: 1.5px solid transparent;
+  box-shadow: 0 4px 12px rgba(229, 83, 61, 0.25);
+}
+
+.photo-source-btn.is-camera:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(229, 83, 61, 0.34);
+}
+
+.photo-source-btn.is-gallery {
+  background: #ffffff;
+  color: var(--text-primary);
+  border: 1.5px solid var(--border-warm);
+  box-shadow: 0 2px 6px rgba(28, 25, 23, 0.05);
+}
+
+.photo-source-btn.is-gallery:hover {
+  border-color: var(--primary-coral);
+  background: var(--primary-soft-bg);
+}
+
 .photo-preview-box {
   position: relative;
   border-radius: 16px;
@@ -548,6 +598,7 @@ button.action-btn:focus-visible,
 
 .photo-preview-overlay {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
@@ -566,6 +617,13 @@ button.action-btn:focus-visible,
   border-radius: 999px;
 }
 
+.photo-retake-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .photo-retake-btn {
   display: inline-flex;
   align-items: center;
@@ -578,6 +636,11 @@ button.action-btn:focus-visible,
   font-weight: 700;
   color: var(--text-primary);
   cursor: pointer;
+}
+
+.photo-retake-btn:hover {
+  border-color: var(--primary-coral);
+  background: var(--primary-soft-bg);
 }
 
 /* GPS Location Box */
@@ -643,6 +706,13 @@ button.action-btn:focus-visible,
   color: var(--text-secondary);
 }
 
+.location-status-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
 .btn-location-refresh {
   min-height: 38px;
   padding-inline: 12px;
@@ -655,6 +725,25 @@ button.action-btn:focus-visible,
   font-weight: 700;
   cursor: pointer;
   flex-shrink: 0;
+}
+
+.btn-location-clear {
+  min-height: 38px;
+  padding-inline: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border-warm);
+  background: #ffffff;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.btn-location-clear:hover:not(:disabled) {
+  border-color: var(--primary-coral);
+  color: var(--primary-coral);
 }
 
 /* Interactive Animal Type Cards (ShareView) */

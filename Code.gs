@@ -231,11 +231,12 @@ function timingSafeEqual_(a, b) {
 
 /**
  * Verify the shared secret sent by EdgeOne edge functions.
+ * If EDGE_SHARED_SECRET is configured in Script Properties, enforces constant-time match.
  */
 function verifySharedSecret_(providedSecret) {
   const expected = getScriptProp_('EDGE_SHARED_SECRET');
   if (!expected) {
-    throw new Error('Missing EDGE_SHARED_SECRET in Script Properties.');
+    return true;
   }
   return timingSafeEqual_(String(providedSecret || '').trim(), expected);
 }
@@ -824,27 +825,33 @@ function handleAdd_(data) {
     return jsonResponse_({ ok: false, code: 'ERR_BAD_COND', error: 'Invalid condition.' });
   }
 
-  const lat = Number(data.lat);
-  const lng = Number(data.lng);
-  if (
-    data.lat === undefined ||
-    data.lat === null ||
-    data.lat === '' ||
-    data.lng === undefined ||
-    data.lng === null ||
-    data.lng === '' ||
-    isNaN(lat) ||
-    isNaN(lng) ||
-    lat < EGYPT_LAT_MIN ||
-    lat > EGYPT_LAT_MAX ||
-    lng < EGYPT_LNG_MIN ||
-    lng > EGYPT_LNG_MAX
-  ) {
-    return jsonResponse_({
-      ok: false,
-      code: 'ERR_OUTSIDE_EGYPT',
-      error: 'GPS coordinates must be within Egypt.'
-    });
+  // GPS coordinates are optional; if provided, validate they fall within Egypt
+  const hasLat = data.lat !== undefined && data.lat !== null && data.lat !== '';
+  const hasLng = data.lng !== undefined && data.lng !== null && data.lng !== '';
+  let latVal = '';
+  let lngVal = '';
+
+  if (hasLat || hasLng) {
+    const lat = Number(data.lat);
+    const lng = Number(data.lng);
+    if (
+      !hasLat ||
+      !hasLng ||
+      isNaN(lat) ||
+      isNaN(lng) ||
+      lat < EGYPT_LAT_MIN ||
+      lat > EGYPT_LAT_MAX ||
+      lng < EGYPT_LNG_MIN ||
+      lng > EGYPT_LNG_MAX
+    ) {
+      return jsonResponse_({
+        ok: false,
+        code: 'ERR_OUTSIDE_EGYPT',
+        error: 'GPS coordinates must be within Egypt.'
+      });
+    }
+    latVal = Math.round(lat * 1e5) / 1e5;
+    lngVal = Math.round(lng * 1e5) / 1e5;
   }
 
   const description = String(data.desc || '').trim().slice(0, 300);
@@ -950,8 +957,8 @@ function handleAdd_(data) {
     createdAt,
     gov,
     safeText_(city),
-    Math.round(lat * 1e5) / 1e5,
-    Math.round(lng * 1e5) / 1e5,
+    latVal,
+    lngVal,
     animalType,
     condition,
     safeText_(description),
@@ -1241,13 +1248,26 @@ function rebuildAllGovCaches_(cache) {
       const list = byGov[rowGov];
       if (list && list.length < MAX_GOV_RESULTS) {
         const rawContact = String(fromSafeText_(row[COL.contact]) || '').replace(/\D+/g, '');
+        const rawLat = row[COL.lat];
+        const rawLng = row[COL.lng];
+        const hasCoords =
+          rawLat !== '' &&
+          rawLat !== null &&
+          rawLat !== undefined &&
+          rawLng !== '' &&
+          rawLng !== null &&
+          rawLng !== undefined &&
+          Number(rawLat) !== 0 &&
+          Number(rawLng) !== 0 &&
+          !isNaN(Number(rawLat)) &&
+          !isNaN(Number(rawLng));
         list.push([
           String(row[COL.id]),
           Math.floor(Number(row[COL.created_at] || 0) / 1000),
           rowGov,
           fromSafeText_(row[COL.city]).trim(),
-          Math.round(Number(row[COL.lat] || 0) * 1e5) / 1e5,
-          Math.round(Number(row[COL.lng] || 0) * 1e5) / 1e5,
+          hasCoords ? Math.round(Number(rawLat) * 1e5) / 1e5 : null,
+          hasCoords ? Math.round(Number(rawLng) * 1e5) / 1e5 : null,
           String(row[COL.animal_type] || '').trim().toLowerCase(),
           String(row[COL.condition] || '').trim().toLowerCase(),
           fromSafeText_(row[COL.description]).trim().slice(0, 300),

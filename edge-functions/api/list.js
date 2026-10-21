@@ -42,6 +42,8 @@ const VALID_GOVS = new Set([
 const VALID_TYPES = new Set(['dog', 'cat']);
 
 const PUBLIC_CACHE_HEADER = 'public, max-age=0, s-maxage=300, stale-while-revalidate=60';
+const DEFAULT_GAS_URL =
+  'https://script.google.com/macros/s/AKfycbzdWqhulLBedqA5wM7hcBMom3RSIGAcqFSLMcOC1xMSW8kQU9FcfqYmNO_AhbB05qZB/exec';
 
 function getEdgeCache() {
   try {
@@ -56,7 +58,7 @@ function getEdgeCache() {
 
 export async function onRequestGet(context) {
   const { request, env } = context;
-  const gasUrl = env && env.GAS_URL;
+  const gasUrl = (env && env.GAS_URL) || DEFAULT_GAS_URL;
 
   if (!gasUrl) {
     return new Response(
@@ -204,3 +206,5 @@ export async function onRequest(context) {
     }
   });
 }
+
+export default onRequest;

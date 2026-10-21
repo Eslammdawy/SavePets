@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { getDrivePhotoUrl } from './api';
-import { getGovernorateName } from './governorates';
+import { getGovernorateName, hasValidCoords } from './governorates';
 import {
   DICT,
   formatTimeAgo,
@@ -196,11 +196,16 @@ export default function RescuePosterModal({ pet, lang, onClose }) {
       ctx.fillText(`📍 ${locationLabel}`, W / 2, 829);
 
       // 6. Description Box
+      const hasGps = hasValidCoords(pet);
       const descText =
         String(pet.desc || '').trim() ||
-        (lang === 'ar'
-          ? 'تم تحديد الموقع بدقة عبر الـ GPS. يرجى المساعدة في الإنقاذ أو المشاركة.'
-          : 'Exact GPS location pinned. Please help rescue or share with local groups.');
+        (hasGps
+          ? lang === 'ar'
+            ? 'تم تحديد الموقع بدقة عبر الـ GPS. يرجى المساعدة في الإنقاذ أو المشاركة.'
+            : 'Exact GPS location pinned. Please help rescue or share with local groups.'
+          : lang === 'ar'
+            ? 'يرجى المساعدة في الإنقاذ أو مشاركة البلاغ في جروبات المنطقة.'
+            : 'Please help rescue or share this report with local groups.');
 
       ctx.fillStyle = '#57534e';
       ctx.font = '600 30px "Cairo", sans-serif';
@@ -209,7 +214,11 @@ export default function RescuePosterModal({ pet, lang, onClose }) {
       // 7. GPS Coordinates Footer inside Card
       ctx.fillStyle = '#78716c';
       ctx.font = '700 26px "Cairo", monospace';
-      ctx.fillText(`GPS: ${pet.lat}, ${pet.lng}`, W / 2, 1110);
+      ctx.fillText(
+        hasGps ? `GPS: ${pet.lat}, ${pet.lng}` : `📍 ${locationLabel}`,
+        W / 2,
+        1110
+      );
 
       // 8. Bottom Branding Bar
       ctx.fillStyle = '#1c1917';

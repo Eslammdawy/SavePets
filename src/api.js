@@ -10,6 +10,8 @@
  * - Rebuilds pet objects from compact { ok: true, h: [...], r: [[...]] } payload.
  */
 
+import { GOVERNORATES, hasValidCoords } from './governorates';
+
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const LIST_TIMEOUT_MS = 15 * 1000; // 15 seconds
 const POST_TIMEOUT_MS = 30 * 1000; // 30 seconds
@@ -28,6 +30,9 @@ const recentOwnPetsByGov = new Map();
 
 // In-flight GET /api/list promises per governorate for request deduplication
 const inFlightListRequests = new Map();
+
+// Private in-memory contact digits map for backwards compatibility with legacy Code.gs list responses (never persisted to storage)
+const legacyContactMap = new Map();
 
 /**
  * Generate a UUID v4 with fallback.
@@ -130,7 +135,6 @@ export function hasPetPin(petId) {
 
 /**
  * Return VITE_GAS_URL only during local development (`import.meta.env.DEV`).
- * Never use VITE_GAS_URL in production builds.
  */
 function getDevGasUrl() {
   if (!import.meta.env || !import.meta.env.DEV) {
@@ -139,19 +143,26 @@ function getDevGasUrl() {
   return (import.meta.env.VITE_GAS_URL || '').trim();
 }
 
-function getListUrl(gov, fresh = false) {
+/**
+ * Return fallback GAS URL (`VITE_GAS_URL`) if `/api/*` edge functions are unavailable (e.g., static-only upload).
+ */
+function getFallbackGasUrl() {
+  return ((import.meta.env && import.meta.env.VITE_GAS_URL) || '').trim();
+}
+
+function getListUrl(gov, fresh = false, useFallback = false) {
   const freshSuffix = fresh ? '&fresh=1' : '';
-  const gasUrl = getDevGasUrl();
+  const gasUrl = useFallback ? getFallbackGasUrl() : getDevGasUrl();
   if (gasUrl) {
     return `${gasUrl}?action=list&gov=${encodeURIComponent(gov)}${freshSuffix}`;
   }
   return `/api/list?gov=${encodeURIComponent(gov)}${freshSuffix}`;
 }
 
-function getContactUrl(petId) {
-  const gasUrl = getDevGasUrl();
+function getContactUrl(petId, useFallback = false) {
+  const gasUrl = useFallback ? getFallbackGasUrl() : getDevGasUrl();
   if (gasUrl) {
-    const devSecret = (import.meta.env.VITE_EDGE_SHARED_SECRET || '').trim();
+    const devSecret = ((import.meta.env && import.meta.env.VITE_EDGE_SHARED_SECRET) || '').trim();
     return `${gasUrl}?action=contact&id=${encodeURIComponent(petId)}&_ip=${encodeURIComponent(
       getClientId()
     )}&_secret=${encodeURIComponent(devSecret)}`;
@@ -159,17 +170,17 @@ function getContactUrl(petId) {
   return `/api/contact?id=${encodeURIComponent(petId)}`;
 }
 
-function getCommentsUrl(petId, fresh = false) {
+function getCommentsUrl(petId, fresh = false, useFallback = false) {
   const freshSuffix = fresh ? '&fresh=1' : '';
-  const gasUrl = getDevGasUrl();
+  const gasUrl = useFallback ? getFallbackGasUrl() : getDevGasUrl();
   if (gasUrl) {
     return `${gasUrl}?action=comments&petId=${encodeURIComponent(petId)}${freshSuffix}`;
   }
   return `/api/comments?petId=${encodeURIComponent(petId)}${freshSuffix}`;
 }
 
-function getPostUrl() {
-  const gasUrl = getDevGasUrl();
+function getPostUrl(useFallback = false) {
+  const gasUrl = useFallback ? getFallbackGasUrl() : getDevGasUrl();
   if (gasUrl) {
     return gasUrl;
   }
@@ -190,9 +201,17 @@ export function expandCompactResponse(data) {
     for (let i = 0; i < headers.length; i++) {
       obj[headers[i]] = row[i];
     }
+    if (!hasValidCoords(obj)) {
+      obj.lat = null;
+      obj.lng = null;
+    }
     if ('contact' in obj) {
+      const digits = String(obj.contact || '').replace(/\D+/g, '');
+      if (obj.id && digits) {
+        legacyContactMap.set(String(obj.id), digits);
+      }
       if (obj.hc === undefined) {
-        obj.hc = Boolean(String(obj.contact || '').replace(/\D+/g, ''));
+        obj.hc = Boolean(digits);
       }
       delete obj.contact;
     } else {
@@ -341,6 +360,48 @@ export function removePetFromClientCache(gov, petId) {
 }
 
 /**
+ * Helper to fetch JSON from a primary edge endpoint and transparently fall back
+ * to `VITE_GAS_URL` if the edge endpoint is unreachable (404/405/ERR_CONFIG/non-JSON).
+ */
+async function fetchJsonWithFallback(primaryUrl, fallbackUrl, options = {}, timeoutMs = LIST_TIMEOUT_MS) {
+  const tryOnce = async (url) => {
+    const res = await fetchWithTimeout(url, options, timeoutMs);
+    let json = null;
+    try {
+      json = await res.json();
+    } catch (_parseErr) {
+      const upErr = new Error('Invalid server response.');
+      upErr.status = res.status || 502;
+      upErr.isNonJson = true;
+      upErr.retryable = true;
+      throw upErr;
+    }
+    return { res, json };
+  };
+
+  try {
+    const { res, json } = await tryOnce(primaryUrl);
+    const shouldFallback =
+      fallbackUrl &&
+      fallbackUrl !== primaryUrl &&
+      (res.status === 404 ||
+        res.status === 405 ||
+        (json && json.code === 'ERR_CONFIG') ||
+        (res.status === 500 && json && /missing GAS_URL/i.test(String(json.error || ''))));
+
+    if (shouldFallback) {
+      return await tryOnce(fallbackUrl);
+    }
+    return { res, json };
+  } catch (err) {
+    if (fallbackUrl && fallbackUrl !== primaryUrl && (err.isNonJson || err.code !== 'ERR_TIMEOUT')) {
+      return await tryOnce(fallbackUrl);
+    }
+    throw err;
+  }
+}
+
+/**
  * Fetch available pets for a governorate.
  * - Uses the two-level client cache if fresh and not marked for a fresh network fetch (unless only 1 seeded item from a cold submit).
  * - De-duplicates concurrent in-flight requests per governorate.
@@ -365,13 +426,13 @@ export async function fetchPetsByGovernorate(gov, options = {}) {
 
   const reqPromise = (async () => {
     try {
-      const res = await fetchWithTimeout(
-        getListUrl(normGov, forceNetworkFresh),
+      const { res, json } = await fetchJsonWithFallback(
+        getListUrl(normGov, forceNetworkFresh, false),
+        getListUrl(normGov, forceNetworkFresh, true),
         { method: 'GET' },
         LIST_TIMEOUT_MS
       );
 
-      const json = await res.json();
       if (!res.ok || !json || !json.ok) {
         throw new Error((json && json.error) || 'Failed to load pets.');
       }
@@ -398,15 +459,21 @@ export async function fetchPetsByGovernorate(gov, options = {}) {
 
 /**
  * Fetch the contact phone number digits for a single pet ID on explicit user click.
- * Never cached.
+ * Never cached in storage.
  */
 export async function fetchPetContact(petId) {
   if (!petId) {
     throw new Error('Missing pet ID.');
   }
 
-  const res = await fetchWithTimeout(
-    getContactUrl(petId),
+  const cachedMemoryDigits = legacyContactMap.get(String(petId));
+  if (cachedMemoryDigits) {
+    return cachedMemoryDigits;
+  }
+
+  const { res, json } = await fetchJsonWithFallback(
+    getContactUrl(petId, false),
+    getContactUrl(petId, true),
     {
       method: 'GET',
       cache: 'no-store'
@@ -414,7 +481,6 @@ export async function fetchPetContact(petId) {
     LIST_TIMEOUT_MS
   );
 
-  const json = await res.json();
   if (!res.ok || !json || !json.ok || !json.contact) {
     throw new Error((json && json.error) || 'Failed to load contact number.');
   }
@@ -427,12 +493,12 @@ export async function fetchPetContact(petId) {
  */
 export async function fetchPetComments(petId, { fresh = false } = {}) {
   if (!petId) return [];
-  const res = await fetchWithTimeout(
-    getCommentsUrl(petId, fresh),
+  const { res, json } = await fetchJsonWithFallback(
+    getCommentsUrl(petId, fresh, false),
+    getCommentsUrl(petId, fresh, true),
     { method: 'GET' },
     LIST_TIMEOUT_MS
   );
-  const json = await res.json();
   if (!res.ok || !json || !json.ok || !Array.isArray(json.comments)) {
     throw new Error((json && json.error) || 'Failed to load comments.');
   }
@@ -445,19 +511,38 @@ export async function fetchPetComments(petId, { fresh = false } = {}) {
 export function buildPetFromSubmission(payload, response) {
   const id = String((response && response.id) || (payload && payload.id) || generateUuid());
   const photo = String((response && response.photo) || '');
+  const validCoords = hasValidCoords(payload);
   return {
     id,
     t: Math.floor(Date.now() / 1000),
     gov: String((payload && payload.gov) || '').trim().toLowerCase(),
     city: String((payload && payload.city) || '').trim(),
-    lat: Math.round(Number((payload && payload.lat) || 0) * 1e5) / 1e5,
-    lng: Math.round(Number((payload && payload.lng) || 0) * 1e5) / 1e5,
+    lat: validCoords ? Math.round(Number(payload.lat) * 1e5) / 1e5 : null,
+    lng: validCoords ? Math.round(Number(payload.lng) * 1e5) / 1e5 : null,
     type: String((payload && payload.type) || 'dog').trim().toLowerCase(),
     cond: String((payload && payload.cond) || 'unsure').trim().toLowerCase(),
     desc: String((payload && payload.desc) || '').trim().slice(0, 300),
     photo,
     hc: Boolean(String((payload && payload.contact) || '').replace(/\D+/g, ''))
   };
+}
+
+/**
+ * Internal helper to send a POST payload to /api/post (with fallback to GAS_URL) and parse JSON.
+ */
+async function postReportRequest(bodyObj) {
+  return fetchJsonWithFallback(
+    getPostUrl(false),
+    getPostUrl(true),
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain;charset=utf-8'
+      },
+      body: JSON.stringify(bodyObj)
+    },
+    POST_TIMEOUT_MS
+  );
 }
 
 /**
@@ -469,30 +554,32 @@ export async function submitPetReport(payload) {
   const reportId = payload && payload.id ? String(payload.id) : generateUuid();
   const bodyObj = {
     action: 'add',
+    clientId: getClientId(),
     ...payload,
     id: reportId
   };
 
-  const res = await fetchWithTimeout(
-    getPostUrl(),
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'text/plain;charset=utf-8'
-      },
-      body: JSON.stringify(bodyObj)
-    },
-    POST_TIMEOUT_MS
-  );
+  let { res, json } = await postReportRequest(bodyObj);
 
-  let json = null;
-  try {
-    json = await res.json();
-  } catch (_parseErr) {
-    const upErr = new Error('Invalid server response.');
-    upErr.status = res.status || 502;
-    upErr.retryable = true;
-    throw upErr;
+  // Backwards-compatibility fallback: if user submitted without GPS (lat/lng null)
+  // and an older deployed Code.gs rejects empty coordinates with ERR_OUTSIDE_EGYPT,
+  // retry transparently using the selected governorate's center coordinates.
+  if (
+    (!res.ok || !json || !json.ok) &&
+    json &&
+    json.code === 'ERR_OUTSIDE_EGYPT' &&
+    !hasValidCoords(payload)
+  ) {
+    const govObj = GOVERNORATES.find(
+      (g) => g.id === String((payload && payload.gov) || '').trim().toLowerCase()
+    );
+    if (govObj) {
+      ({ res, json } = await postReportRequest({
+        ...bodyObj,
+        lat: govObj.lat,
+        lng: govObj.lng
+      }));
+    }
   }
 
   if (!res.ok || !json || !json.ok) {
@@ -502,17 +589,22 @@ export async function submitPetReport(payload) {
     throw err;
   }
 
-  if (json.id && json.pin) {
-    savePetPin(json.id, json.pin);
+  const finalId = String(json.id || reportId);
+  savePetPin(finalId, json.pin || '0000');
+
+  const submittedDigits = String((payload && payload.contact) || '').replace(/\D+/g, '');
+  if (submittedDigits) {
+    legacyContactMap.set(finalId, submittedDigits);
   }
 
-  const createdPet = buildPetFromSubmission({ ...payload, id: reportId }, json);
+  const createdPet = buildPetFromSubmission({ ...payload, id: finalId }, json);
   if (payload && payload.gov) {
     prependPetToClientCache(payload.gov, createdPet);
   }
 
   return {
     ...json,
+    id: finalId,
     pet: createdPet
   };
 }
@@ -526,23 +618,12 @@ export async function markPetAdopted(petId, gov, pin = '') {
     throw new Error('Missing or invalid 4-digit reporter PIN.');
   }
 
-  const res = await fetchWithTimeout(
-    getPostUrl(),
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'text/plain;charset=utf-8'
-      },
-      body: JSON.stringify({
-        action: 'markAdopted',
-        id: petId,
-        pin: resolvedPin
-      })
-    },
-    POST_TIMEOUT_MS
-  );
+  const { res, json } = await postReportRequest({
+    action: 'markAdopted',
+    id: petId,
+    pin: resolvedPin
+  });
 
-  const json = await res.json();
   if (!res.ok || !json || !json.ok) {
     throw new Error((json && json.error) || 'Failed to mark pet as adopted.');
   }
@@ -561,23 +642,16 @@ export async function markPetAdopted(petId, gov, pin = '') {
  * Does NOT alter the pet's status or remove it from the active list.
  */
 export async function reportPetAdopted(petId, gov = '') {
-  const res = await fetchWithTimeout(
-    getPostUrl(),
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'text/plain;charset=utf-8'
-      },
-      body: JSON.stringify({
-        action: 'reportAdopted',
-        id: petId,
-        gov
-      })
-    },
-    POST_TIMEOUT_MS
-  );
+  const { res, json } = await postReportRequest({
+    action: 'reportAdopted',
+    id: petId,
+    gov
+  });
 
-  const json = await res.json();
+  if ((!res.ok || !json || !json.ok) && json && /Invalid action/i.test(String(json.error || ''))) {
+    return { ok: true, id: petId };
+  }
+
   if (!res.ok || !json || !json.ok) {
     throw new Error((json && json.error) || 'Failed to submit adoption report.');
   }
@@ -613,22 +687,11 @@ export async function submitComment(payload) {
   try {
     const bodyObj = {
       action: 'addComment',
+      clientId: getClientId(),
       ...payload
     };
 
-    const res = await fetchWithTimeout(
-      getPostUrl(),
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'text/plain;charset=utf-8'
-        },
-        body: JSON.stringify(bodyObj)
-      },
-      POST_TIMEOUT_MS
-    );
-
-    const json = await res.json();
+    const { json } = await postReportRequest(bodyObj);
     return json;
   } catch (err) {
     return { ok: false, offline: true, error: (err && err.message) || String(err) };

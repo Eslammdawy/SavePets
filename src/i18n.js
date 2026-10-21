@@ -1,4 +1,4 @@
-import { getGovernorateName } from './governorates';
+import { getGovernorateName, hasValidCoords } from './governorates';
 
 export const DICT = {
   ar: {
@@ -11,27 +11,33 @@ export const DICT = {
     // Share View
     shareTitle: 'بلّغ عن حيوان يحتاج للإنقاذ',
     shareSubtitle: 'التقط صورة وحدد الموقع لمساعدة المنقذين والمتبنين في الوصول إليه بسرعة.',
-    step1Title: 'الصورة والموقع الجغرافي',
+    step1Title: 'الصورة والموقع',
     step2Title: 'حالة الحيوان وتفاصيله',
     step3Title: 'وسيلة التواصل (اختياري)',
     photoLabel: 'صورة الحيوان *',
-    photoBtn: 'التقط صورة أو اختر من المعرض',
+    photoBtn: 'التقط صورة بالكاميرا أو ارفع من المعرض',
+    photoCameraBtn: 'التقط صورة بالكاميرا',
+    photoGalleryBtn: 'اختر صورة من المعرض',
     photoHint: 'صورة واضحة للحيوان والمكان المحيط تساعد المنقذين كثيراً',
     photoChangeBtn: 'تغيير الصورة',
+    photoRetakeCameraBtn: 'الكاميرا',
+    photoRetakeGalleryBtn: 'المعرض',
     photoCompressing: 'جاري ضغط وتحسين الصورة...',
     photoCompressedSize: 'حجم مثالي للرفع:',
-    locationLabel: 'الموقع الجغرافي (GPS) *',
-    useMyLocation: 'تحديد موقعي الحالي بالـ GPS',
+    locationLabel: 'الموقع الجغرافي (GPS) — اختياري',
+    useMyLocation: 'تحديد موقعي الحالي بالـ GPS (اختياري)',
+    locationOptionalHint: 'يمكنك تثبيت إحداثيات الـ GPS لملء المحافظة والمنطقة تلقائياً، أو اختيار المحافظة وكتابة المدينة/المنطقة يدوياً بالأسفل.',
     locating: 'جاري تحديد الموقع...',
     locationCaptured: 'تم تثبيت الإحداثيات بنجاح',
     locationUpdate: 'تحديث',
+    locationClear: 'إلغاء',
     locationDeniedError:
-      'تم رفض إذن الموقع أو تعذر تحديده. يرجى تفعيل خدمات الموقع (GPS) والسماح للمتصفح بالوصول للموقع ثم المحاولة مرة أخرى.',
-    locationRequiredError: 'يرجى الضغط على "تحديد موقعي الحالي" لالتقاط إحداثيات GPS قبل الإرسال.',
+      'تعذر الوصول للـ GPS أو تم رفض الإذن. لا مشكلة! يمكنك اختيار المحافظة وكتابة المدينة أو المنطقة يدوياً بالأسفل.',
+    locationRequiredError: 'يرجى اختيار المحافظة قبل الإرسال.',
     govLabel: 'المحافظة *',
     govPlaceholder: 'اختر المحافظة...',
-    cityLabel: 'المنطقة / الحي (اختياري)',
-    cityPlaceholder: 'مثال: المعادي، سموحة، الدقي...',
+    cityLabel: 'المدينة / المنطقة / الحي',
+    cityPlaceholder: 'اكتب المدينة أو الحي يدوياً (مثال: المعادي، سموحة، الدقي)...',
     detectingAddress: 'جاري قراءة المحافظة والمنطقة تلقائياً...',
     typeLabel: 'نوع الحيوان *',
     condLabel: 'الحالة الصحية *',
@@ -48,7 +54,7 @@ export const DICT = {
     pinIssuedTitle: 'احتفظ برقم البلاغ السري (PIN)',
     pinIssuedNote: (pin) =>
       `الرقم السري لبلاغك هو ${pin}. احتفظ به لإغلاق البلاغ عند إنقاذ الحيوان أو تبنيه (تم حفظه تلقائياً على هذا الجهاز).`,
-    validationRequired: 'يرجى استكمال الصورة، وتحديد الموقع (GPS)، والمحافظة.',
+    validationRequired: 'يرجى إضافة صورة الحيوان واختيار المحافظة.',
     validationContact: 'يرجى إدخال رقم واتساب صحيح مع كود الدولة (8 إلى 15 رقماً).',
 
     // Animal types
@@ -90,6 +96,7 @@ export const DICT = {
     cardTitleNeedsHelp: (type) => `${type} يحتاج للمساعدة والإنقاذ`,
     cardTitleAdopt: (type) => `${type} أليف متاح للتبني`,
     noDescFallback: 'تم تحديد الموقع عبر الـ GPS — افتح الخريطة للوصول للمكان مباشرة.',
+    noDescNoGpsFallback: 'لم يتم كتابة وصف إضافي — راجع منطقة البلاغ أو تواصل مع المبلّغ لمعرفة المكان بالتفصيل.',
     whatsappAvailable: 'متاح تواصل واتساب',
     readMore: 'اقرأ المزيد',
     readLess: 'عرض أقل',
@@ -207,27 +214,33 @@ export const DICT = {
     // Share View
     shareTitle: 'Report a pet in need',
     shareSubtitle: 'Snap a photo and pin the location so nearby rescuers and adopters can reach it.',
-    step1Title: 'Photo & GPS Location',
+    step1Title: 'Photo & Location',
     step2Title: 'Animal Details & Condition',
     step3Title: 'Contact Info (Optional)',
     photoLabel: 'Pet Photo *',
-    photoBtn: 'Take a Photo or Choose Image',
+    photoBtn: 'Take a Photo or Choose from Gallery',
+    photoCameraBtn: 'Take a Photo',
+    photoGalleryBtn: 'Choose from Gallery',
     photoHint: 'A clear photo showing the animal and surroundings helps rescuers find it faster',
     photoChangeBtn: 'Change Photo',
+    photoRetakeCameraBtn: 'Camera',
+    photoRetakeGalleryBtn: 'Gallery',
     photoCompressing: 'Optimizing photo...',
     photoCompressedSize: 'Optimized size:',
-    locationLabel: 'GPS Location *',
-    useMyLocation: 'Pin my current GPS location',
+    locationLabel: 'GPS Location (Optional)',
+    useMyLocation: 'Pin my current GPS location (Optional)',
+    locationOptionalHint: 'You can pin your GPS coordinates to auto-fill the area, or simply select the governorate and enter the city/area manually below.',
     locating: 'Getting GPS coordinates...',
     locationCaptured: 'GPS coordinates pinned',
     locationUpdate: 'Update',
+    locationClear: 'Remove',
     locationDeniedError:
-      'Location permission was denied or timed out. Please enable GPS/location permission in your browser settings and try again.',
-    locationRequiredError: 'Please tap "Pin my current GPS location" before submitting.',
+      'Could not access GPS location. No worries — you can select the governorate and enter the city/area manually below.',
+    locationRequiredError: 'Please select a governorate before submitting.',
     govLabel: 'Governorate *',
     govPlaceholder: 'Select governorate...',
-    cityLabel: 'Area / Neighborhood (optional)',
-    cityPlaceholder: 'e.g. Maadi, Smouha, Dokki...',
+    cityLabel: 'City / Area / Neighborhood',
+    cityPlaceholder: 'Enter city or neighborhood manually (e.g. Maadi, Smouha, Dokki)...',
     detectingAddress: 'Auto-detecting governorate & area...',
     typeLabel: 'Animal Type *',
     condLabel: 'Health Condition *',
@@ -244,7 +257,7 @@ export const DICT = {
     pinIssuedTitle: 'Save your 4-digit reporter PIN',
     pinIssuedNote: (pin) =>
       `Your report PIN is ${pin}. Save this code to close the case once rescued (also saved on this device).`,
-    validationRequired: 'Photo, GPS location, and governorate are required.',
+    validationRequired: 'Photo and governorate are required.',
     validationContact: 'Please enter a valid WhatsApp number with country code (8–15 digits).',
 
     // Animal types
@@ -286,6 +299,7 @@ export const DICT = {
     cardTitleNeedsHelp: (type) => `${type} needs rescue & care`,
     cardTitleAdopt: (type) => `${type} available for adoption`,
     noDescFallback: 'Exact GPS coordinates pinned — open Google Maps to navigate to the spot.',
+    noDescNoGpsFallback: 'No extra landmark notes provided — check the area name or contact the reporter for details.',
     whatsappAvailable: 'WhatsApp contact available',
     readMore: 'Read more',
     readLess: 'Show less',
@@ -484,11 +498,33 @@ export function buildWhatsAppUrl(pet, lang = 'ar', contactDigits = '') {
 }
 
 /**
+ * Build Google Maps search/pin URL for a pet (uses exact lat,lng when available, or city + governorate query).
+ */
+export function buildPetMapsUrl(pet, lang = 'ar') {
+  if (!pet) return '';
+  if (hasValidCoords(pet)) {
+    return `https://www.google.com/maps?q=${encodeURIComponent(`${pet.lat},${pet.lng}`)}`;
+  }
+  const govName = getGovernorateName(pet.gov, lang);
+  const cityText = String(pet.city || '').trim();
+  const hasDistinctCity =
+    cityText && cityText.toLowerCase() !== govName.toLowerCase();
+  const query = [
+    hasDistinctCity ? cityText : '',
+    govName,
+    lang === 'ar' ? 'مصر' : 'Egypt'
+  ]
+    .filter(Boolean)
+    .join(', ');
+  return query ? `https://www.google.com/maps?q=${encodeURIComponent(query)}` : '';
+}
+
+/**
  * Build shareable text summary + Google Maps link for a pet report.
  */
 export function buildShareText(pet, lang = 'ar') {
   const summary = buildAutoSummary(pet, lang);
-  const mapsUrl = `https://www.google.com/maps?q=${encodeURIComponent(`${pet.lat},${pet.lng}`)}`;
+  const mapsUrl = buildPetMapsUrl(pet, lang);
   const desc = String(pet.desc || '').trim();
 
   if (lang === 'ar') {
@@ -496,7 +532,7 @@ export function buildShareText(pet, lang = 'ar') {
       `🐾 نداء إنقاذ عبر تطبيق Street Pets Egypt`,
       summary,
       desc ? `📝 التفاصيل: ${desc}` : '',
-      `📍 الموقع على الخريطة: ${mapsUrl}`
+      mapsUrl ? `📍 الموقع على الخريطة: ${mapsUrl}` : ''
     ]
       .filter(Boolean)
       .join('\n');
@@ -506,7 +542,7 @@ export function buildShareText(pet, lang = 'ar') {
     `🐾 Street Pets Egypt — Rescue Alert`,
     summary,
     desc ? `📝 Details: ${desc}` : '',
-    `📍 Exact GPS Location: ${mapsUrl}`
+    mapsUrl ? `📍 Location on Maps: ${mapsUrl}` : ''
   ]
     .filter(Boolean)
     .join('\n');
@@ -517,14 +553,14 @@ export function buildShareText(pet, lang = 'ar') {
  */
 export async function sharePetCaseNative(pet, lang = 'ar') {
   const text = buildShareText(pet, lang);
-  const mapsUrl = `https://www.google.com/maps?q=${encodeURIComponent(`${pet.lat},${pet.lng}`)}`;
+  const mapsUrl = buildPetMapsUrl(pet, lang);
 
   if (typeof navigator !== 'undefined' && navigator.share) {
     try {
       await navigator.share({
         title: 'Street Pets Egypt',
         text,
-        url: mapsUrl
+        ...(mapsUrl ? { url: mapsUrl } : {})
       });
       return { shared: true, copied: false };
     } catch (_err) {

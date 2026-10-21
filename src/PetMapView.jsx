@@ -1,7 +1,19 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { GOVERNORATES, getGovernorateName, formatDistance } from './governorates';
+import { GOVERNORATES, getGovernorateName, formatDistance, hasValidCoords } from './governorates';
 import { DICT } from './i18n';
 import PetCard from './PetCard';
+
+function resolvePetMapCoords(pet) {
+  if (!pet) return null;
+  if (hasValidCoords(pet)) {
+    return { lat: Number(pet.lat), lng: Number(pet.lng) };
+  }
+  const govObj = GOVERNORATES.find((g) => g.id === pet.gov);
+  if (govObj) {
+    return { lat: govObj.lat, lng: govObj.lng };
+  }
+  return null;
+}
 
 const LEAFLET_CSS_URL = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
 const LEAFLET_CSS_SRI = 'sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=';
@@ -194,9 +206,9 @@ export default function PetMapView({
 
     const currentPets = Array.from(petsByIdRef.current.values());
     currentPets.forEach((pet) => {
-      const lat = Number(pet.lat);
-      const lng = Number(pet.lng);
-      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+      const resolved = resolvePetMapCoords(pet);
+      if (!resolved) return;
+      const { lat, lng } = resolved;
 
       boundsPoints.push([lat, lng]);
       const isSelected = pet.id === selectedPetId;
@@ -257,10 +269,9 @@ export default function PetMapView({
   function handleSelectPetPin(pet) {
     setSelectedPetId(pet.id);
     const map = mapInstanceRef.current;
-    const lat = Number(pet.lat);
-    const lng = Number(pet.lng);
-    if (map && Number.isFinite(lat) && Number.isFinite(lng)) {
-      map.flyTo([lat, lng], 15, { duration: 0.55 });
+    const resolved = resolvePetMapCoords(pet);
+    if (map && resolved) {
+      map.flyTo([resolved.lat, resolved.lng], 15, { duration: 0.55 });
     }
   }
 

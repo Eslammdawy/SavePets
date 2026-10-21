@@ -6,11 +6,12 @@ import {
   hasPetPin,
   reportPetAdopted
 } from './api';
-import { getGovernorateName, formatDistance } from './governorates';
+import { getGovernorateName, formatDistance, hasValidCoords } from './governorates';
 import {
   DICT,
   formatTimeAgo,
   buildWhatsAppUrl,
+  buildPetMapsUrl,
   sharePetCaseNative
 } from './i18n';
 import { loadPetComments, addPetComment, syncPetComments } from './comments';
@@ -129,7 +130,8 @@ function PetCard({
 
   const timeAgo = formatTimeAgo(pet.t, lang);
   const distanceLabel = formatDistance(distanceKm, lang);
-  const mapsUrl = `https://www.google.com/maps?q=${encodeURIComponent(`${pet.lat},${pet.lng}`)}`;
+  const hasGps = hasValidCoords(pet);
+  const mapsUrl = buildPetMapsUrl(pet, lang);
   const hasContact = Boolean(pet.hc);
 
   const cardHeadline =
@@ -347,7 +349,9 @@ function PetCard({
               </p>
             </div>
           ) : (
-            <p className="pet-desc-fallback">{t.noDescFallback}</p>
+            <p className="pet-desc-fallback">
+              {hasGps ? t.noDescFallback : t.noDescNoGpsFallback || t.noDescFallback}
+            </p>
           )}
 
           {/* Interactive Comments & Follow-up Section */}

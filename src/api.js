@@ -1,7 +1,7 @@
 /**
  * Single networking & caching module (api.js)
  *
- * - Production endpoints: GET /api/list?gov=..., GET /api/contact?id=..., and POST /api/post
+ * - Production endpoints: GET /api/list?gov=..., GET /api/contact?id=..., GET /api/comments?petId=..., and POST /api/post
  * - Local dev fallback only (when import.meta.env.DEV is true): VITE_GAS_URL
  * - Two-level client cache keyed by governorate only:
  *     1) In-memory Map with timestamps
@@ -11,12 +11,23 @@
  */
 
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const LIST_TIMEOUT_MS = 15 * 1000; // 15 seconds
+const POST_TIMEOUT_MS = 30 * 1000; // 30 seconds
 const SESSION_PREFIX = 'sp_gov_cache_v1_';
 const CLIENT_ID_KEY = 'sp_client_id_v1';
 const REPORTER_PINS_KEY = 'sp_reporter_pins_v1';
 
 // Level 1: In-memory Map<gov, { ts: number, items: Array<Pet> }>
 const memoryCache = new Map();
+
+// Governorates that must use `&fresh=1` on their next network fetch after a write
+const needsFreshGovs = new Set();
+
+// Recently created pets by this client (< 6 min old) to guarantee immediate visibility even if edge/upstream is slightly behind
+const recentOwnPetsByGov = new Map();
+
+// In-flight GET /api/list promises per governorate for request deduplication
+const inFlightListRequests = new Map();
 
 /**
  * Generate a UUID v4 with fallback.
@@ -30,6 +41,31 @@ export function generateUuid() {
     const v = c === 'x' ? r : (r & 0x3) | 0x8;
     return v.toString(16);
   });
+}
+
+/**
+ * Wrapper around fetch() that enforces an AbortController timeout.
+ * Timeout errors are marked `retryable = true`.
+ */
+export async function fetchWithTimeout(url, options = {}, timeoutMs = LIST_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+  } catch (err) {
+    if (err && (err.name === 'AbortError' || /aborted/i.test(String(err.message)))) {
+      const timeoutErr = new Error('Request timed out.');
+      timeoutErr.code = 'ERR_TIMEOUT';
+      timeoutErr.retryable = true;
+      throw timeoutErr;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -103,12 +139,13 @@ function getDevGasUrl() {
   return (import.meta.env.VITE_GAS_URL || '').trim();
 }
 
-function getListUrl(gov) {
+function getListUrl(gov, fresh = false) {
+  const freshSuffix = fresh ? '&fresh=1' : '';
   const gasUrl = getDevGasUrl();
   if (gasUrl) {
-    return `${gasUrl}?action=list&gov=${encodeURIComponent(gov)}`;
+    return `${gasUrl}?action=list&gov=${encodeURIComponent(gov)}${freshSuffix}`;
   }
-  return `/api/list?gov=${encodeURIComponent(gov)}`;
+  return `/api/list?gov=${encodeURIComponent(gov)}${freshSuffix}`;
 }
 
 function getContactUrl(petId) {
@@ -120,6 +157,15 @@ function getContactUrl(petId) {
     )}&_secret=${encodeURIComponent(devSecret)}`;
   }
   return `/api/contact?id=${encodeURIComponent(petId)}`;
+}
+
+function getCommentsUrl(petId, fresh = false) {
+  const freshSuffix = fresh ? '&fresh=1' : '';
+  const gasUrl = getDevGasUrl();
+  if (gasUrl) {
+    return `${gasUrl}?action=comments&petId=${encodeURIComponent(petId)}${freshSuffix}`;
+  }
+  return `/api/comments?petId=${encodeURIComponent(petId)}${freshSuffix}`;
 }
 
 function getPostUrl() {
@@ -192,7 +238,8 @@ export function getFreshCachedList(gov) {
 /**
  * Save a governorate's pet list to both memory Map and sessionStorage.
  */
-function saveToClientCache(gov, items, ts = Date.now()) {
+export function saveToClientCache(gov, items, ts = Date.now()) {
+  if (!gov || !Array.isArray(items)) return;
   const entry = { ts, items };
   memoryCache.set(gov, entry);
   try {
@@ -203,13 +250,66 @@ function saveToClientCache(gov, items, ts = Date.now()) {
 }
 
 /**
- * Drop the cached list for a specific governorate from memory and sessionStorage.
+ * Insert a newly submitted pet at the top of the cached list for its governorate
+ * in memory and sessionStorage, and mark the governorate so its next network fetch uses `&fresh=1`.
+ */
+export function prependPetToClientCache(gov, pet) {
+  if (!gov || !pet || !pet.id) return;
+  const normGov = String(gov).trim().toLowerCase();
+  const cleanPet = { ...pet, hc: Boolean(pet.hc || pet.contact) };
+  delete cleanPet.contact;
+
+  // Record in recentOwnPetsByGov so any subsequent network fetch merges it at top if missing
+  const ownList = recentOwnPetsByGov.get(normGov) || [];
+  recentOwnPetsByGov.set(normGov, [
+    cleanPet,
+    ...ownList.filter((p) => p.id !== cleanPet.id)
+  ]);
+
+  const existing = getFreshCachedList(normGov);
+  if (Array.isArray(existing)) {
+    const merged = [cleanPet, ...existing.filter((p) => p.id !== cleanPet.id)];
+    saveToClientCache(normGov, merged, Date.now());
+  } else {
+    // If no list was cached yet, seed cache with this new pet AND keep needsFreshGovs so next network fetch gets full list + merges this pet
+    saveToClientCache(normGov, [cleanPet], Date.now());
+  }
+
+  needsFreshGovs.add(normGov);
+}
+
+/**
+ * Merge any recently created pets by this author into a freshly fetched network list.
+ */
+function mergeRecentOwnPets(gov, networkItems) {
+  const normGov = String(gov || '').trim().toLowerCase();
+  const ownList = recentOwnPetsByGov.get(normGov);
+  if (!ownList || ownList.length === 0) {
+    return networkItems;
+  }
+  const nowSec = Math.floor(Date.now() / 1000);
+  const activeOwn = ownList.filter((p) => nowSec - Number(p.t || nowSec) < 360);
+  if (activeOwn.length === 0) {
+    recentOwnPetsByGov.delete(normGov);
+    return networkItems;
+  }
+  recentOwnPetsByGov.set(normGov, activeOwn);
+  const networkIds = new Set(networkItems.map((item) => item.id));
+  const missingOwn = activeOwn.filter((p) => !networkIds.has(p.id));
+  return missingOwn.length > 0 ? [...missingOwn, ...networkItems] : networkItems;
+}
+
+/**
+ * Drop the cached list for a specific governorate from memory and sessionStorage,
+ * and mark it so the next network fetch uses `&fresh=1`.
  */
 export function invalidateGovCache(gov) {
   if (!gov) return;
-  memoryCache.delete(gov);
+  const normGov = String(gov).trim().toLowerCase();
+  needsFreshGovs.add(normGov);
+  memoryCache.delete(normGov);
   try {
-    sessionStorage.removeItem(SESSION_PREFIX + gov);
+    sessionStorage.removeItem(SESSION_PREFIX + normGov);
   } catch (_e) {
     // Ignore
   }
@@ -221,37 +321,79 @@ export function invalidateGovCache(gov) {
  */
 export function removePetFromClientCache(gov, petId) {
   if (!gov || !petId) return;
-  const current = getFreshCachedList(gov) || (memoryCache.get(gov) && memoryCache.get(gov).items);
+  const normGov = String(gov).trim().toLowerCase();
+  const ownList = recentOwnPetsByGov.get(normGov);
+  if (Array.isArray(ownList)) {
+    recentOwnPetsByGov.set(
+      normGov,
+      ownList.filter((p) => p.id !== petId)
+    );
+  }
+  const current =
+    getFreshCachedList(normGov) ||
+    (memoryCache.get(normGov) && memoryCache.get(normGov).items);
   if (Array.isArray(current)) {
-    const memEntry = memoryCache.get(gov);
+    const memEntry = memoryCache.get(normGov);
     const ts = memEntry ? memEntry.ts : Date.now();
     const updated = current.filter((p) => p.id !== petId);
-    saveToClientCache(gov, updated, ts);
+    saveToClientCache(normGov, updated, ts);
   }
 }
 
 /**
  * Fetch available pets for a governorate.
- * Uses the two-level client cache if fresh; otherwise fetches from network.
+ * - Uses the two-level client cache if fresh and not marked for a fresh network fetch (unless only 1 seeded item from a cold submit).
+ * - De-duplicates concurrent in-flight requests per governorate.
+ * - Uses `&fresh=1` on the first network fetch after any write.
  */
-export async function fetchPetsByGovernorate(gov) {
-  const cached = getFreshCachedList(gov);
-  if (cached !== null) {
-    return cached;
+export async function fetchPetsByGovernorate(gov, options = {}) {
+  const normGov = String(gov || '').trim().toLowerCase();
+  if (!normGov) return [];
+
+  const forceNetworkFresh = Boolean(options.fresh || needsFreshGovs.has(normGov));
+  if (!forceNetworkFresh) {
+    const cached = getFreshCachedList(normGov);
+    if (cached !== null) {
+      return cached;
+    }
   }
 
-  const res = await fetch(getListUrl(gov), {
-    method: 'GET'
-  });
-
-  const json = await res.json();
-  if (!res.ok || !json || !json.ok) {
-    throw new Error((json && json.error) || 'Failed to load pets.');
+  const inflightKey = `${normGov}:${forceNetworkFresh ? 'fresh' : 'std'}`;
+  if (inFlightListRequests.has(inflightKey)) {
+    return inFlightListRequests.get(inflightKey);
   }
 
-  const items = expandCompactResponse(json);
-  saveToClientCache(gov, items);
-  return items;
+  const reqPromise = (async () => {
+    try {
+      const res = await fetchWithTimeout(
+        getListUrl(normGov, forceNetworkFresh),
+        { method: 'GET' },
+        LIST_TIMEOUT_MS
+      );
+
+      const json = await res.json();
+      if (!res.ok || !json || !json.ok) {
+        throw new Error((json && json.error) || 'Failed to load pets.');
+      }
+
+      needsFreshGovs.delete(normGov);
+      const items = mergeRecentOwnPets(normGov, expandCompactResponse(json));
+      saveToClientCache(normGov, items);
+      return items;
+    } catch (err) {
+      // If a fresh network fetch fails right after an online submit, still return any cached/seeded items if available
+      const fallback = getFreshCachedList(normGov);
+      if (forceNetworkFresh && Array.isArray(fallback) && fallback.length > 0) {
+        return fallback;
+      }
+      throw err;
+    } finally {
+      inFlightListRequests.delete(inflightKey);
+    }
+  })();
+
+  inFlightListRequests.set(inflightKey, reqPromise);
+  return reqPromise;
 }
 
 /**
@@ -263,10 +405,14 @@ export async function fetchPetContact(petId) {
     throw new Error('Missing pet ID.');
   }
 
-  const res = await fetch(getContactUrl(petId), {
-    method: 'GET',
-    cache: 'no-store'
-  });
+  const res = await fetchWithTimeout(
+    getContactUrl(petId),
+    {
+      method: 'GET',
+      cache: 'no-store'
+    },
+    LIST_TIMEOUT_MS
+  );
 
   const json = await res.json();
   if (!res.ok || !json || !json.ok || !json.contact) {
@@ -277,25 +423,78 @@ export async function fetchPetContact(petId) {
 }
 
 /**
+ * Fetch comments for a pet ID from the server.
+ */
+export async function fetchPetComments(petId, { fresh = false } = {}) {
+  if (!petId) return [];
+  const res = await fetchWithTimeout(
+    getCommentsUrl(petId, fresh),
+    { method: 'GET' },
+    LIST_TIMEOUT_MS
+  );
+  const json = await res.json();
+  if (!res.ok || !json || !json.ok || !Array.isArray(json.comments)) {
+    throw new Error((json && json.error) || 'Failed to load comments.');
+  }
+  return json.comments;
+}
+
+/**
+ * Build a client Pet object from a submission payload and server response `{ id, photo }`.
+ */
+export function buildPetFromSubmission(payload, response) {
+  const id = String((response && response.id) || (payload && payload.id) || generateUuid());
+  const photo = String((response && response.photo) || '');
+  return {
+    id,
+    t: Math.floor(Date.now() / 1000),
+    gov: String((payload && payload.gov) || '').trim().toLowerCase(),
+    city: String((payload && payload.city) || '').trim(),
+    lat: Math.round(Number((payload && payload.lat) || 0) * 1e5) / 1e5,
+    lng: Math.round(Number((payload && payload.lng) || 0) * 1e5) / 1e5,
+    type: String((payload && payload.type) || 'dog').trim().toLowerCase(),
+    cond: String((payload && payload.cond) || 'unsure').trim().toLowerCase(),
+    desc: String((payload && payload.desc) || '').trim().slice(0, 300),
+    photo,
+    hc: Boolean(String((payload && payload.contact) || '').replace(/\D+/g, ''))
+  };
+}
+
+/**
  * Submit a new pet report.
  * Sends Content-Type: text/plain;charset=utf-8 to avoid CORS preflight.
- * Invalidates the affected governorate's client cache on success and stores the returned PIN.
+ * Inserts the new pet at the top of the governorate's client cache and marks next network fetch `&fresh=1`.
  */
 export async function submitPetReport(payload) {
+  const reportId = payload && payload.id ? String(payload.id) : generateUuid();
   const bodyObj = {
     action: 'add',
-    ...payload
+    ...payload,
+    id: reportId
   };
 
-  const res = await fetch(getPostUrl(), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'text/plain;charset=utf-8'
+  const res = await fetchWithTimeout(
+    getPostUrl(),
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain;charset=utf-8'
+      },
+      body: JSON.stringify(bodyObj)
     },
-    body: JSON.stringify(bodyObj)
-  });
+    POST_TIMEOUT_MS
+  );
 
-  const json = await res.json();
+  let json = null;
+  try {
+    json = await res.json();
+  } catch (_parseErr) {
+    const upErr = new Error('Invalid server response.');
+    upErr.status = res.status || 502;
+    upErr.retryable = true;
+    throw upErr;
+  }
+
   if (!res.ok || !json || !json.ok) {
     const err = new Error((json && json.error) || 'Failed to submit report.');
     if (json && json.code) err.code = json.code;
@@ -307,11 +506,15 @@ export async function submitPetReport(payload) {
     savePetPin(json.id, json.pin);
   }
 
-  if (payload.gov) {
-    invalidateGovCache(payload.gov);
+  const createdPet = buildPetFromSubmission({ ...payload, id: reportId }, json);
+  if (payload && payload.gov) {
+    prependPetToClientCache(payload.gov, createdPet);
   }
 
-  return json;
+  return {
+    ...json,
+    pet: createdPet
+  };
 }
 
 /**
@@ -323,17 +526,21 @@ export async function markPetAdopted(petId, gov, pin = '') {
     throw new Error('Missing or invalid 4-digit reporter PIN.');
   }
 
-  const res = await fetch(getPostUrl(), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'text/plain;charset=utf-8'
+  const res = await fetchWithTimeout(
+    getPostUrl(),
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain;charset=utf-8'
+      },
+      body: JSON.stringify({
+        action: 'markAdopted',
+        id: petId,
+        pin: resolvedPin
+      })
     },
-    body: JSON.stringify({
-      action: 'markAdopted',
-      id: petId,
-      pin: resolvedPin
-    })
-  });
+    POST_TIMEOUT_MS
+  );
 
   const json = await res.json();
   if (!res.ok || !json || !json.ok) {
@@ -341,8 +548,9 @@ export async function markPetAdopted(petId, gov, pin = '') {
   }
 
   if (gov) {
-    removePetFromClientCache(gov, petId);
-    invalidateGovCache(gov);
+    const normGov = String(gov).trim().toLowerCase();
+    removePetFromClientCache(normGov, petId);
+    needsFreshGovs.add(normGov);
   }
 
   return json;
@@ -353,17 +561,21 @@ export async function markPetAdopted(petId, gov, pin = '') {
  * Does NOT alter the pet's status or remove it from the active list.
  */
 export async function reportPetAdopted(petId, gov = '') {
-  const res = await fetch(getPostUrl(), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'text/plain;charset=utf-8'
+  const res = await fetchWithTimeout(
+    getPostUrl(),
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain;charset=utf-8'
+      },
+      body: JSON.stringify({
+        action: 'reportAdopted',
+        id: petId,
+        gov
+      })
     },
-    body: JSON.stringify({
-      action: 'reportAdopted',
-      id: petId,
-      gov
-    })
-  });
+    POST_TIMEOUT_MS
+  );
 
   const json = await res.json();
   if (!res.ok || !json || !json.ok) {
@@ -393,13 +605,17 @@ export async function submitComment(payload) {
       ...payload
     };
 
-    const res = await fetch(getPostUrl(), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'text/plain;charset=utf-8'
+    const res = await fetchWithTimeout(
+      getPostUrl(),
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'text/plain;charset=utf-8'
+        },
+        body: JSON.stringify(bodyObj)
       },
-      body: JSON.stringify(bodyObj)
-    });
+      POST_TIMEOUT_MS
+    );
 
     const json = await res.json();
     return json;

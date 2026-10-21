@@ -6,7 +6,7 @@ import {
 } from './governorates';
 import { DICT } from './i18n';
 import { compressImageFile } from './imageCompress';
-import { submitPetReport } from './api';
+import { submitPetReport, generateUuid } from './api';
 import { enqueueOfflineReport } from './offlineQueue';
 import { FirstAidInlineCard } from './FirstAidModal';
 
@@ -169,6 +169,7 @@ export default function ShareView({ lang, onPetAdded, onOpenFirstAid }) {
 
     const finalCity = trimmedCity || getGovernorateName(gov, lang);
     const payload = {
+      id: generateUuid(),
       gov,
       city: finalCity,
       lat: coords.lat,
@@ -184,7 +185,12 @@ export default function ShareView({ lang, onPetAdded, onOpenFirstAid }) {
 
     // If browser is offline, immediately queue in localStorage
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-      enqueueOfflineReport(payload);
+      const queued = enqueueOfflineReport(payload);
+      if (!queued.ok) {
+        setErrorMsg(t.offlineStorageFullError);
+        scrollToTop();
+        return;
+      }
       resetFormFields();
       setSuccessMsg(t.savedOfflineSuccess);
       scrollToTop();
@@ -204,16 +210,22 @@ export default function ShareView({ lang, onPetAdded, onOpenFirstAid }) {
       scrollToTop();
 
       if (onPetAdded) {
-        onPetAdded(submittedGov, payload, res);
+        onPetAdded(submittedGov, res && res.pet);
       }
     } catch (err) {
       const isNetworkFailure =
         !navigator.onLine ||
         err instanceof TypeError ||
-        /network|fetch|offline/i.test(String(err && err.message));
+        (err && err.retryable === true) ||
+        /network|fetch|offline|timed out/i.test(String(err && err.message));
 
       if (isNetworkFailure) {
-        enqueueOfflineReport(payload);
+        const queued = enqueueOfflineReport(payload);
+        if (!queued.ok) {
+          setErrorMsg(t.offlineStorageFullError);
+          scrollToTop();
+          return;
+        }
         resetFormFields();
         setSuccessMsg(t.savedOfflineSuccess);
         scrollToTop();

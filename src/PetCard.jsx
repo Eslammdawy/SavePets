@@ -3,7 +3,7 @@ import { getDrivePhotoUrl, fetchPetContact, hasPetPin, reportPetAdopted } from '
 import { getGovernorateName, formatDistance } from './governorates';
 import { DICT, formatTimeAgo, buildWhatsAppUrl } from './i18n';
 import { sharePetCaseNative } from './RescuePosterModal';
-import { loadPetComments, addPetComment } from './comments';
+import { loadPetComments, addPetComment, syncPetComments } from './comments';
 
 const TRUNCATE_LENGTH = 120;
 
@@ -46,8 +46,10 @@ export default function PetCard({
   // Comments & Follow-up State
   const [comments, setComments] = useState(() => loadPetComments(pet.id));
   const [showComments, setShowComments] = useState(false);
+  const [loadingRemoteComments, setLoadingRemoteComments] = useState(false);
   const [authorInput, setAuthorInput] = useState('');
   const [commentText, setCommentText] = useState('');
+  const [commentHoneypot, setCommentHoneypot] = useState('');
   const [postingComment, setPostingComment] = useState(false);
   const [commentSuccess, setCommentSuccess] = useState('');
   const [commentError, setCommentError] = useState('');
@@ -66,6 +68,27 @@ export default function PetCard({
       window.removeEventListener('sp-comments-changed', handleCommentsChanged);
     };
   }, [pet.id]);
+
+  // Fetch comments from server lazily when the comment tray opens
+  useEffect(() => {
+    if (!showComments || !pet.id) return;
+    let active = true;
+    setLoadingRemoteComments(true);
+    syncPetComments(pet.id)
+      .then((merged) => {
+        if (active && Array.isArray(merged)) {
+          setComments(merged);
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setLoadingRemoteComments(false);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [showComments, pet.id]);
 
   const t = DICT[lang] || DICT.en;
   const govName = getGovernorateName(pet.gov, lang);
@@ -173,9 +196,10 @@ export default function PetCard({
 
     setPostingComment(true);
     try {
-      const updated = addPetComment(pet.id, {
+      const updated = await addPetComment(pet.id, {
         author: authorInput.trim(),
-        text: cleanText
+        text: cleanText,
+        website: commentHoneypot
       });
       setComments(updated);
       setCommentText('');
@@ -336,7 +360,11 @@ export default function PetCard({
 
               {/* Comments List */}
               <div className="pet-comments-list">
-                {comments.length === 0 ? (
+                {loadingRemoteComments && comments.length === 0 ? (
+                  <div className="no-comments-box">
+                    <p>{t.loadingComments}</p>
+                  </div>
+                ) : comments.length === 0 ? (
                   <div className="no-comments-box">
                     <span className="no-comments-icon" aria-hidden="true">🐾</span>
                     <p>{t.noCommentsYet}</p>
@@ -393,6 +421,19 @@ export default function PetCard({
                     maxLength={500}
                     rows={2}
                   />
+
+                  <div className="hp-field" aria-hidden="true">
+                    <label htmlFor={`cmt-hp-${pet.id}`}>Website</label>
+                    <input
+                      id={`cmt-hp-${pet.id}`}
+                      type="text"
+                      name="website"
+                      tabIndex={-1}
+                      autoComplete="off"
+                      value={commentHoneypot}
+                      onChange={(e) => setCommentHoneypot(e.target.value)}
+                    />
+                  </div>
 
                   <div className="comment-form-actions">
                     <span className="comment-char-count">{commentText.length} / 500</span>

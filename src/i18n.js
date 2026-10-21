@@ -113,6 +113,7 @@ export const DICT = {
     addFollowUpBtn: 'إضافة متابعة / تعليق',
     hideFollowUpsBtn: 'إخفاء المتابعات',
     noCommentsYet: 'لا توجد تعليقات أو متابعات بعد. هل قمت بتفقد الحيوان أو لديك علامة أوضح؟ أضف تحديثك بالأسفل.',
+    loadingComments: 'جاري تحميل المتابعات...',
     commentAuthorLabel: 'الاسم أو الصفة (اختياري)',
     commentAuthorPlaceholder: 'اسمك أو صفتك (مثال: أحمد - متطوع، فاعل خير)...',
     commentTextLabel: 'اكتب متابعة أو علامة إضافية',
@@ -184,6 +185,10 @@ export const DICT = {
     syncingBtn: 'جاري الإرسال...',
     savedOfflineSuccess:
       'لا يوجد اتصال بالإنترنت حالياً — تم حفظ البلاغ والصورة بأمان على جهازك وسيتم نشره تلقائياً فور عودة الاتصال!',
+    offlineStorageFullError:
+      'مساحة التخزين ممتلئة أو تم الوصول للحد الأقصى للبلاغات المعلقة. يرجى توفير مساحة أو الإرسال عند الاتصال بالإنترنت.',
+    offlineFailedTitle: 'تعذر نشر بلاغ محفوظ بسبب خطأ دائم:',
+    discardFailedBtn: 'تجاهل وحذف',
     syncCompleteToast: (count) => `تم نشر ${count} بلاغ محفوظ بنجاح!`,
     installAppBtn: 'تثبيت التطبيق'
   },
@@ -300,6 +305,7 @@ export const DICT = {
     addFollowUpBtn: 'Add follow-up / comment',
     hideFollowUpsBtn: 'Hide follow-ups',
     noCommentsYet: 'No follow-up updates yet. Checked on this pet or know a clearer landmark? Post an update below.',
+    loadingComments: 'Loading follow-ups...',
     commentAuthorLabel: 'Your name or role (optional)',
     commentAuthorPlaceholder: 'Your name / role (e.g. Sarah - Rescuer, Neighbor)...',
     commentTextLabel: 'Write a follow-up or landmark note',
@@ -371,6 +377,10 @@ export const DICT = {
     syncingBtn: 'Syncing...',
     savedOfflineSuccess:
       'No internet connection right now — your report & photo were saved offline and will publish automatically once you reconnect!',
+    offlineStorageFullError:
+      'Storage is full, free some space or submit when online.',
+    offlineFailedTitle: 'A queued report failed permanently:',
+    discardFailedBtn: 'Discard',
     syncCompleteToast: (count) => `Successfully published ${count} queued report(s)!`,
     installAppBtn: 'Install App'
   }
@@ -381,7 +391,9 @@ export const DICT = {
  */
 export function formatTimeAgo(epochSec, lang = 'ar') {
   const nowSec = Math.floor(Date.now() / 1000);
-  const diffSec = Math.max(0, nowSec - Number(epochSec || nowSec));
+  const raw = Number(epochSec || nowSec);
+  const targetSec = raw > 1e11 ? Math.floor(raw / 1000) : raw;
+  const diffSec = Math.max(0, nowSec - targetSec);
   const mins = Math.floor(diffSec / 60);
   const hours = Math.floor(diffSec / 3600);
   const days = Math.floor(diffSec / 86400);

@@ -1,9 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { DICT } from './i18n';
 import ShareView from './ShareView';
 import AdoptView from './AdoptView';
 import FirstAidModal from './FirstAidModal';
-import { getOfflineQueue, flushOfflineQueue } from './offlineQueue';
+import {
+  getOfflineQueue,
+  flushOfflineQueue,
+  getFailedOfflineReports,
+  discardFailedOfflineReport
+} from './offlineQueue';
 
 const LANG_STORAGE_KEY = 'sp_lang_v1';
 
@@ -29,6 +34,7 @@ export default function App() {
     typeof navigator !== 'undefined' ? navigator.onLine !== false : true
   );
   const [queuedCount, setQueuedCount] = useState(() => getOfflineQueue().length);
+  const [failedReports, setFailedReports] = useState(() => getFailedOfflineReports());
   const [syncingQueue, setSyncingQueue] = useState(false);
   const [syncToast, setSyncToast] = useState('');
 
@@ -45,35 +51,43 @@ export default function App() {
 
   const t = DICT[lang] || DICT.en;
 
-  async function handleSyncOfflineQueue() {
-    if (syncingQueue) return;
-    setSyncingQueue(true);
-    try {
-      const res = await flushOfflineQueue();
-      setQueuedCount(res.remainingCount);
-      if (res.syncedCount > 0) {
-        setSyncToast(
-          (DICT[lang] || DICT.en).syncCompleteToast(res.syncedCount)
-        );
-        setTimeout(() => setSyncToast(''), 4000);
-        if (res.lastGov) {
-          setPetAddedEvent({ gov: res.lastGov, ts: Date.now() });
+  const handleSyncOfflineQueue = useCallback(
+    async (force = false) => {
+      setSyncingQueue(true);
+      try {
+        const res = await flushOfflineQueue({ force });
+        setQueuedCount(res.remainingCount);
+        setFailedReports(getFailedOfflineReports());
+        if (res.syncedCount > 0) {
+          setSyncToast(
+            (DICT[lang] || DICT.en).syncCompleteToast(res.syncedCount)
+          );
+          setTimeout(() => setSyncToast(''), 4000);
+          if (res.lastGov) {
+            setPetAddedEvent({
+              gov: res.lastGov,
+              pet: res.lastPet || null,
+              ts: Date.now()
+            });
+          }
         }
+      } finally {
+        setSyncingQueue(false);
       }
-    } finally {
-      setSyncingQueue(false);
-    }
-  }
+    },
+    [lang]
+  );
 
   useEffect(() => {
-    function refreshQueueCount() {
+    function refreshQueueState() {
       setQueuedCount(getOfflineQueue().length);
+      setFailedReports(getFailedOfflineReports());
     }
 
     function handleOnline() {
       setIsOnline(true);
       if (getOfflineQueue().length > 0) {
-        handleSyncOfflineQueue();
+        handleSyncOfflineQueue(false);
       }
     }
 
@@ -81,16 +95,16 @@ export default function App() {
       setIsOnline(false);
     }
 
-    window.addEventListener('sp-offline-queue-changed', refreshQueueCount);
+    window.addEventListener('sp-offline-queue-changed', refreshQueueState);
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
     return () => {
-      window.removeEventListener('sp-offline-queue-changed', refreshQueueCount);
+      window.removeEventListener('sp-offline-queue-changed', refreshQueueState);
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, [lang]);
+  }, [handleSyncOfflineQueue]);
 
   function toggleLanguage() {
     setLang((prev) => (prev === 'ar' ? 'en' : 'ar'));
@@ -106,15 +120,22 @@ export default function App() {
     if (activeTab !== 'adopt') {
       setActiveTab('adopt');
     } else {
-      // If already on Adopt tab, trigger search or prompt/focus governorate selector
       setAdoptTrigger((prev) => prev + 1);
     }
   }
 
-  function handlePetAdded(submittedGov) {
+  function handlePetAdded(submittedGov, createdPet = null) {
     if (submittedGov) {
-      setPetAddedEvent({ gov: submittedGov, ts: Date.now() });
+      setPetAddedEvent({
+        gov: submittedGov,
+        pet: createdPet || null,
+        ts: Date.now()
+      });
     }
+  }
+
+  function handleDiscardFailed(queueId) {
+    setFailedReports(discardFailedOfflineReport(queueId));
   }
 
   return (
@@ -175,7 +196,7 @@ export default function App() {
       </header>
 
       {/* Offline Queue & Network Status Banner */}
-      {(!isOnline || queuedCount > 0) && (
+      {(!isOnline || queuedCount > 0 || failedReports.length > 0) && (
         <div className="surface-card offline-queue-banner" role="status">
           <div className="offline-queue-info">
             <span className="offline-icon" aria-hidden="true">
@@ -190,6 +211,23 @@ export default function App() {
                   {t.offlineQueueCount(queuedCount)}
                 </div>
               )}
+              {failedReports.length > 0 && (
+                <div className="offline-failed-list">
+                  <div className="offline-failed-title">⚠️ {t.offlineFailedTitle}</div>
+                  {failedReports.map((item) => (
+                    <div key={item.queueId} className="offline-failed-item">
+                      <span>{item.reason}</span>
+                      <button
+                        type="button"
+                        className="btn-discard-failed"
+                        onClick={() => handleDiscardFailed(item.queueId)}
+                      >
+                        ✕ {t.discardFailedBtn}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
@@ -197,7 +235,7 @@ export default function App() {
             <button
               type="button"
               className="btn-sync-queue"
-              onClick={handleSyncOfflineQueue}
+              onClick={() => handleSyncOfflineQueue(true)}
               disabled={syncingQueue}
             >
               🔄 {syncingQueue ? t.syncingBtn : t.syncNowBtn}

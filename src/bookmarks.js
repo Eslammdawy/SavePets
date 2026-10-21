@@ -83,3 +83,30 @@ export function removeSavedPetById(currentList, petId) {
   saveBookmarkedPets(next);
   return next;
 }
+
+/**
+ * Reconcile bookmarked pets when a governorate's available pet list loads:
+ * remove any saved pet from that governorate that is no longer in the available list.
+ */
+export function reconcileSavedPetsForGov(currentList, gov, availableGovPets) {
+  if (!gov || !Array.isArray(currentList) || !Array.isArray(availableGovPets)) {
+    return currentList;
+  }
+  const normGov = String(gov).trim().toLowerCase();
+  const availableIds = new Set(availableGovPets.map((p) => p && p.id).filter(Boolean));
+  let changed = false;
+  const next = currentList.filter((item) => {
+    if (!item || String(item.gov || '').trim().toLowerCase() !== normGov) {
+      return true;
+    }
+    if (!availableIds.has(item.id)) {
+      changed = true;
+      return false;
+    }
+    return true;
+  });
+  if (changed) {
+    saveBookmarkedPets(next);
+  }
+  return changed ? next : currentList;
+}

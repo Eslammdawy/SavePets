@@ -5,11 +5,19 @@ import {
   calculateDistanceKm
 } from './governorates';
 import { DICT } from './i18n';
-import { fetchPetsByGovernorate, markPetAdopted, getPetPin } from './api';
+import {
+  fetchPetsByGovernorate,
+  markPetAdopted,
+  getPetPin,
+  getFreshCachedList,
+  saveToClientCache
+} from './api';
 import {
   loadSavedPets,
   toggleSavedPet,
-  removeSavedPetById
+  removeSavedPetById,
+  saveBookmarkedPets,
+  reconcileSavedPetsForGov
 } from './bookmarks';
 import PetCard from './PetCard';
 import PetMapView from './PetMapView';
@@ -54,10 +62,16 @@ export default function AdoptView({ lang, adoptTrigger = 0, petAddedEvent = null
 
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const latestSearchSeqRef = useRef(0);
 
   const savedIds = new Set(savedPets.map((item) => item.id));
 
-  async function runSearchForGov(govToSearch, cityVal = cityInput, typeVal = typeInput) {
+  async function runSearchForGov(
+    govToSearch,
+    cityVal = cityInput,
+    typeVal = typeInput,
+    options = {}
+  ) {
     setErrorMsg('');
 
     if (!govToSearch) {
@@ -68,28 +82,52 @@ export default function AdoptView({ lang, adoptTrigger = 0, petAddedEvent = null
       return;
     }
 
-    setLoading(true);
+    const reqSeq = ++latestSearchSeqRef.current;
+
+    // If we already have an optimistic/cached list in memory (e.g. right after submitting a report), render it immediately
+    const immediateCached = getFreshCachedList(govToSearch);
+    if (Array.isArray(immediateCached) && immediateCached.length > 0 && options.renderImmediate) {
+      setGovPets(immediateCached);
+      setSearchedGov(govToSearch);
+      setAppliedCity(cityVal.trim().toLowerCase());
+      setAppliedType(typeVal);
+      setPage(1);
+    } else {
+      setLoading(true);
+    }
+
     try {
-      // Fetches from network ONLY if not already fresh in memory/sessionStorage (<5 min)
-      const list = await fetchPetsByGovernorate(govToSearch);
+      const list = await fetchPetsByGovernorate(govToSearch, options);
+      // Latest-request-wins: ignore responses for an outdated governorate search
+      if (reqSeq !== latestSearchSeqRef.current) {
+        return;
+      }
       setGovPets(list);
       setSearchedGov(govToSearch);
       setAppliedCity(cityVal.trim().toLowerCase());
       setAppliedType(typeVal);
       setPage(1);
+      setSavedPets((prev) => reconcileSavedPetsForGov(prev, govToSearch, list));
     } catch (err) {
+      if (reqSeq !== latestSearchSeqRef.current) {
+        return;
+      }
       setErrorMsg(err.message || 'Failed to fetch pets.');
     } finally {
-      setLoading(false);
+      if (reqSeq === latestSearchSeqRef.current) {
+        setLoading(false);
+      }
     }
   }
 
-  // When a pet is added in ShareView, preselect its governorate and load its pets
+  // When a pet is added in ShareView, preselect its governorate, render the new report immediately, and refresh with &fresh=1
   useEffect(() => {
     if (!petAddedEvent || !petAddedEvent.gov) return;
     setSavedOnly(false);
     setSelectedGov(petAddedEvent.gov);
-    runSearchForGov(petAddedEvent.gov, cityInput, typeInput);
+    runSearchForGov(petAddedEvent.gov, cityInput, typeInput, {
+      renderImmediate: true
+    });
   }, [petAddedEvent]);
 
   // Respond when user clicks "Save & adopt a pet" while already on this tab
@@ -209,14 +247,32 @@ export default function AdoptView({ lang, adoptTrigger = 0, petAddedEvent = null
 
   async function handleSearch(e) {
     e.preventDefault();
-    await runSearchForGov(selectedGov, cityInput, typeInput);
+    await runSearchForGov(selectedGov, cityInput, typeInput, { fresh: true });
   }
 
   async function handleMarkAdopted(pet) {
     const pin = getPetPin(pet.id);
-    await markPetAdopted(pet.id, pet.gov, pin);
+    const prevGovPets = govPets;
+    const prevSavedPets = savedPets;
+
+    // 1. Optimistically remove from local state and saved bookmarks
+    setErrorMsg('');
     setGovPets((prev) => prev.filter((item) => item.id !== pet.id));
     setSavedPets((prev) => removeSavedPetById(prev, pet.id));
+
+    try {
+      await markPetAdopted(pet.id, pet.gov, pin);
+    } catch (err) {
+      // Roll back optimistic UI change and show error
+      setGovPets(prevGovPets);
+      setSavedPets(prevSavedPets);
+      saveBookmarkedPets(prevSavedPets);
+      if (pet.gov) {
+        saveToClientCache(pet.gov, prevGovPets);
+      }
+      setErrorMsg((err && err.message) || t.actionFailedError);
+      throw err;
+    }
   }
 
   // Choose base source: either the user's saved bookmarks across all governorates, or the loaded governorate list

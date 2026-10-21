@@ -121,14 +121,15 @@ const EGYPT_LAT_MAX = 31.7;
 const EGYPT_LNG_MIN = 24.7;
 const EGYPT_LNG_MAX = 36.9;
 
-const MAX_RECENT_ROWS = 300;
+const MAX_RECENT_ROWS = 1500;
 const MAX_GOV_RESULTS = 100;
 const CACHE_TTL_SEC = 300;
+const COMMENTS_CACHE_TTL_SEC = 60;
 const CHUNK_SIZE = 30000;
-// Pre-allocated chunk keys so a single getAll / removeAll covers metadata + all chunks
-const CACHE_KEYS = ['all_meta', 'all_0', 'all_1', 'all_2', 'all_3', 'all_4', 'all_5'];
+const MAX_GOV_CHUNKS = 4; // 4 chunks * 30,000 chars = 120,000 chars per governorate
 const MAX_IMAGE_BYTES = 300 * 1024; // ~300 KB server limit
 const ARCHIVE_MAX_AGE_MS = 60 * 24 * 60 * 60 * 1000; // 60 days
+const ARCHIVE_TIME_BUDGET_MS = 270 * 1000; // 4.5 minutes budget (stops before 5-min limit)
 const MAX_LOG_ROWS = 500;
 
 // Rate limits per IP key per hour
@@ -137,6 +138,31 @@ const RL_COMMENT_MAX = 20;
 const RL_CONTACT_MAX = 30;
 const RL_REPORT_ADOPTED_MAX = 10;
 const RL_PIN_FAIL_MAX = 5;
+
+/**
+ * Build pre-allocated cache keys for a single governorate (`gov_<id>_meta`, `gov_<id>_0`..`gov_<id>_3`).
+ */
+function govCacheKeys_(gov) {
+  const keys = ['gov_' + gov + '_meta'];
+  for (let i = 0; i < MAX_GOV_CHUNKS; i++) {
+    keys.push('gov_' + gov + '_' + i);
+  }
+  return keys;
+}
+
+/**
+ * Build all cache keys across all 27 governorates for full invalidation.
+ */
+function allGovCacheKeys_() {
+  const all = [];
+  for (let g = 0; g < VALID_GOVS.length; g++) {
+    const keys = govCacheKeys_(VALID_GOVS[g]);
+    for (let k = 0; k < keys.length; k++) {
+      all.push(keys[k]);
+    }
+  }
+  return all;
+}
 
 /**
  * Sanitize user-controlled text to prevent spreadsheet formula injection.
@@ -285,7 +311,6 @@ function normalizeIpKey_(rawIpKey) {
 
 /**
  * Check and increment an hourly rate limit counter in CacheService.
- * Must be called inside LockService when atomicity is required.
  */
 function checkAndIncrementRateLimit_(cache, actionPrefix, ipKey, maxPerHour) {
   if (!ipKey) return false;
@@ -342,13 +367,12 @@ function setup() {
       sheet.getRange(1, 1, 1, SHEET_HEADERS.length).setValues([SHEET_HEADERS]);
       sheet.setFrozenRows(1);
     } else {
-      // Ensure pin_hash header is present at the end of existing sheets
       const existingHeaders = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
       if (existingHeaders.indexOf('pin_hash') === -1) {
         sheet.getRange(1, existingHeaders.length + 1).setValue('pin_hash');
       }
     }
-    // Plain-text format on city (col 4), description (col 9), contact (col 11)
+    // Plain-text format on city, description, contact
     formatColumnsPlainText_(sheet, [COL.city + 1, COL.description + 1, COL.contact + 1]);
   });
 
@@ -381,23 +405,33 @@ function setup() {
     logsSheet.setFrozenRows(1);
   }
 
-  // Install archive trigger if not already installed
+  // Install daily archive trigger and 5-minute cache warmup trigger if missing
   const triggers = ScriptApp.getProjectTriggers();
-  const exists = triggers.some(function (t) {
+  const hasArchive = triggers.some(function (t) {
     return t.getHandlerFunction() === 'archiveOld';
   });
-  if (!exists) {
+  if (!hasArchive) {
     ScriptApp.newTrigger('archiveOld')
       .timeBased()
-      .onMonthDay(1)
+      .everyDays(1)
       .atHour(3)
+      .create();
+  }
+
+  const hasWarmup = triggers.some(function (t) {
+    return t.getHandlerFunction() === 'warmCaches';
+  });
+  if (!hasWarmup) {
+    ScriptApp.newTrigger('warmCaches')
+      .timeBased()
+      .everyMinutes(5)
       .create();
   }
 }
 
 /**
  * GET handler:
- * - ?action=list&gov=<governorate_id>[&type=dog|cat] (public)
+ * - ?action=list&gov=<governorate_id>[&type=dog|cat][&fresh=1] (public)
  * - ?action=comments&petId=<pet_id> (public)
  * - ?action=contact&id=<pet_id>&_ip=<ip_key>&_secret=<secret> (protected by shared secret)
  */
@@ -431,11 +465,12 @@ function doGet(e) {
       return jsonResponse_({ ok: false, code: 'ERR_BAD_TYPE', error: 'Invalid animal type.' });
     }
 
-    const allCompactRows = getCachedOrBuildAvailablePets_();
+    const forceFresh = String(params.fresh || '') === '1';
+    const govCompactRows = getCachedOrBuildGovPets_(gov, forceFresh);
     const filtered = [];
-    for (let i = 0; i < allCompactRows.length; i++) {
-      if (allCompactRows[i][2] === gov && (!typeFilter || allCompactRows[i][6] === typeFilter)) {
-        filtered.push(allCompactRows[i]);
+    for (let i = 0; i < govCompactRows.length; i++) {
+      if (!typeFilter || govCompactRows[i][6] === typeFilter) {
+        filtered.push(govCompactRows[i]);
         if (filtered.length >= MAX_GOV_RESULTS) break;
       }
     }
@@ -583,7 +618,7 @@ function petExistsInSheets_(ss, petId) {
 }
 
 /**
- * Handle adding a follow-up comment on a pet case.
+ * Handle adding a follow-up comment on a pet case (idempotent on commentId).
  */
 function handleAddComment_(data) {
   if (data.website && String(data.website).trim() !== '') {
@@ -614,6 +649,30 @@ function handleAddComment_(data) {
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let sheet = ss.getSheetByName(SHEET_COMMENTS);
+    if (!sheet) {
+      sheet = ss.insertSheet(SHEET_COMMENTS);
+      sheet.getRange(1, 1, 1, COMMENTS_HEADERS.length).setValues([COMMENTS_HEADERS]);
+      sheet.setFrozenRows(1);
+      formatColumnsPlainText_(sheet, [2, 4, 5]);
+    }
+
+    // Idempotency check: if commentId already exists, return ok without duplicating
+    const lastCommentRow = sheet.getLastRow();
+    if (lastCommentRow >= 2 && UUID_REGEX.test(rawCommentId)) {
+      const scanRows = Math.min(lastCommentRow - 1, 300);
+      const scanStart = Math.max(2, lastCommentRow - scanRows + 1);
+      const existingCell = sheet
+        .getRange(scanStart, 1, scanRows, 1)
+        .createTextFinder(id)
+        .matchEntireCell(true)
+        .findNext();
+      if (existingCell) {
+        return jsonResponse_({ ok: true, id: id, duplicate: true });
+      }
+    }
+
     if (!checkAndIncrementRateLimit_(cache, 'comment', ipKey, RL_COMMENT_MAX)) {
       return jsonResponse_({
         ok: false,
@@ -622,18 +681,10 @@ function handleAddComment_(data) {
       });
     }
 
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
     if (!petExistsInSheets_(ss, petId)) {
       return jsonResponse_({ ok: false, code: 'ERR_PET_NOT_FOUND', error: 'Pet case not found.' });
     }
 
-    let sheet = ss.getSheetByName(SHEET_COMMENTS);
-    if (!sheet) {
-      sheet = ss.insertSheet(SHEET_COMMENTS);
-      sheet.getRange(1, 1, 1, COMMENTS_HEADERS.length).setValues([COMMENTS_HEADERS]);
-      sheet.setFrozenRows(1);
-      formatColumnsPlainText_(sheet, [2, 4, 5]);
-    }
     sheet.appendRow([
       id,
       safeText_(petId),
@@ -641,6 +692,10 @@ function handleAddComment_(data) {
       safeText_(author),
       safeText_(text)
     ]);
+
+    // Invalidate per-pet comments cache
+    cache.remove('cmts_' + petId);
+
     return jsonResponse_({ ok: true, id: id, ts: createdAt });
   } finally {
     lock.releaseLock();
@@ -648,22 +703,52 @@ function handleAddComment_(data) {
 }
 
 /**
- * Handle fetching comments for a pet.
+ * Handle fetching comments for a pet using TextFinder + bounded single getRange + 60s CacheService.
  */
 function handleGetComments_(params) {
   const petId = String(params.petId || '').trim();
   if (!UUID_REGEX.test(petId)) {
     return jsonResponse_({ ok: false, code: 'ERR_BAD_PET_ID', error: 'Invalid petId parameter.' });
   }
+
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'cmts_' + petId;
+  const cachedJson = cache.get(cacheKey);
+  if (cachedJson) {
+    try {
+      return jsonResponse_({ ok: true, comments: JSON.parse(cachedJson) });
+    } catch (_e) {
+      // Fall through on corrupted cache
+    }
+  }
+
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(SHEET_COMMENTS);
-  if (!sheet || sheet.getLastRow() <= 1) {
+  const lastRow = sheet ? sheet.getLastRow() : 0;
+  if (!sheet || lastRow <= 1) {
+    cache.put(cacheKey, '[]', COMMENTS_CACHE_TTL_SEC);
     return jsonResponse_({ ok: true, comments: [] });
   }
 
-  const numRows = Math.min(sheet.getLastRow() - 1, 200);
-  const startRow = Math.max(2, sheet.getLastRow() - numRows + 1);
-  const data = sheet.getRange(startRow, 1, numRows, COMMENTS_HEADERS.length).getValues();
+  // Find matching rows for petId across the sheet using TextFinder on pet_id column (col 2)
+  const matches = sheet
+    .getRange(2, 2, lastRow - 1, 1)
+    .createTextFinder(petId)
+    .matchEntireCell(true)
+    .findAll();
+
+  if (!matches || matches.length === 0) {
+    cache.put(cacheKey, '[]', COMMENTS_CACHE_TTL_SEC);
+    return jsonResponse_({ ok: true, comments: [] });
+  }
+
+  // Take the most recent up to 50 comment matches and read a bounded range in ONE getRange call
+  const recentMatches = matches.slice(-50);
+  const maxRow = recentMatches[recentMatches.length - 1].getRow();
+  const minRow = Math.max(recentMatches[0].getRow(), maxRow - 500 + 1);
+  const numRows = maxRow - minRow + 1;
+
+  const data = sheet.getRange(minRow, 1, numRows, COMMENTS_HEADERS.length).getValues();
   const matched = [];
   for (let i = 0; i < data.length; i++) {
     const rowPetId = fromSafeText_(data[i][1]);
@@ -677,11 +762,18 @@ function handleGetComments_(params) {
       });
     }
   }
+
+  try {
+    cache.put(cacheKey, JSON.stringify(matched), COMMENTS_CACHE_TTL_SEC);
+  } catch (_e) {
+    // Ignore if comments payload exceeds cache entry limit
+  }
+
   return jsonResponse_({ ok: true, comments: matched });
 }
 
 /**
- * Handle adding a new pet report.
+ * Handle adding a new pet report (idempotent on client-generated UUID `id`).
  */
 function handleAdd_(data) {
   // Reject honeypot-filled submissions silently
@@ -801,12 +893,37 @@ function handleAdd_(data) {
     });
   }
 
+  const rawClientId = String(data.id || '').trim();
+  const id = UUID_REGEX.test(rawClientId) ? rawClientId : Utilities.getUuid();
   const cache = CacheService.getScriptCache();
 
-  // Atomic rate-limit check and increment inside script lock BEFORE Drive upload
+  // Atomic idempotency check AND rate-limit check/increment inside script lock BEFORE Drive upload
   const rlLock = LockService.getScriptLock();
   rlLock.waitLock(10000);
   try {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_PETS);
+    const lastRow = sheet ? sheet.getLastRow() : 0;
+    if (lastRow >= 2 && UUID_REGEX.test(rawClientId)) {
+      const scanRows = Math.min(lastRow - 1, 300);
+      const scanStart = Math.max(2, lastRow - scanRows + 1);
+      const existingCell = sheet
+        .getRange(scanStart, COL.id + 1, scanRows, 1)
+        .createTextFinder(id)
+        .matchEntireCell(true)
+        .findNext();
+      if (existingCell) {
+        const existingPhoto = String(
+          sheet.getRange(existingCell.getRow(), COL.photo_id + 1).getValue() || ''
+        );
+        return jsonResponse_({
+          ok: true,
+          id: id,
+          photo: existingPhoto,
+          duplicate: true
+        });
+      }
+    }
+
     if (!checkAndIncrementRateLimit_(cache, 'add', ipKey, RL_ADD_MAX)) {
       return jsonResponse_({
         ok: false,
@@ -818,11 +935,10 @@ function handleAdd_(data) {
     rlLock.releaseLock();
   }
 
-  const id = Utilities.getUuid();
   const pin = String(Math.floor(1000 + Math.random() * 9000));
   const pinHash = hashPin_(pin, pinSalt);
 
-  // Upload photo to Drive with ONE getFolderById + createFile (no setSharing per file)
+  // Upload photo to Drive AFTER validation and rate limiting
   const ext = mimeType === 'image/png' ? '.png' : mimeType === 'image/jpeg' ? '.jpg' : '.webp';
   const blob = Utilities.newBlob(bytes, mimeType, 'pet_' + id + ext);
   const file = DriveApp.getFolderById(folderId).createFile(blob);
@@ -851,7 +967,7 @@ function handleAdd_(data) {
   try {
     const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_PETS);
     sheet.appendRow(newRow);
-    invalidateCache_(cache);
+    invalidateGovCache_(cache, gov);
   } catch (writeErr) {
     try {
       file.setTrashed(true);
@@ -921,6 +1037,7 @@ function handleMarkAdopted_(data) {
     const rowNum = cell.getRow();
     const rowData = sheet.getRange(rowNum, 1, 1, SHEET_HEADERS.length).getValues()[0];
     const storedHash = String(rowData[COL.pin_hash] || '').trim();
+    const rowGov = String(rowData[COL.governorate] || '').trim().toLowerCase();
 
     if (!storedHash) {
       return jsonResponse_({
@@ -942,7 +1059,7 @@ function handleMarkAdopted_(data) {
 
     sheet.getRange(rowNum, COL.status + 1).setValue('adopted');
     cache.remove(failKey);
-    invalidateCache_(cache);
+    invalidateGovCache_(cache, rowGov);
   } finally {
     lock.releaseLock();
   }
@@ -1016,112 +1133,223 @@ function handleReportAdopted_(data) {
 }
 
 /**
- * Read from chunked ScriptCache with ONE getAll, or rebuild from the last 300 rows
- * with ONE getRange().getValues() and store with ONE putAll.
+ * Try reading a governorate's chunked list from CacheService in ONE getAll call.
+ * Returns Array of compact rows on hit, or null on miss.
  */
-function getCachedOrBuildAvailablePets_() {
-  const cache = CacheService.getScriptCache();
-  const cached = cache.getAll(CACHE_KEYS);
-
-  if (cached && cached.all_meta) {
-    const chunkCount = parseInt(cached.all_meta, 10);
-    if (chunkCount === 0) {
-      return [];
-    }
-    if (chunkCount > 0 && chunkCount <= CACHE_KEYS.length - 1) {
-      const parts = [];
-      let complete = true;
-      for (let i = 0; i < chunkCount; i++) {
-        const part = cached['all_' + i];
-        if (typeof part !== 'string') {
-          complete = false;
-          break;
-        }
-        parts.push(part);
-      }
-      if (complete) {
-        try {
-          return JSON.parse(parts.join(''));
-        } catch (_e) {
-          // Cache corrupted; fall through to rebuild
-        }
-      }
-    }
+function readGovFromCache_(cache, gov) {
+  const keys = govCacheKeys_(gov);
+  const cached = cache.getAll(keys);
+  const metaKey = 'gov_' + gov + '_meta';
+  if (!cached || !cached[metaKey]) {
+    return null;
   }
-
-  // Cache miss: Read at most the last 300 data rows in ONE call (no getDataRange)
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_PETS);
-  const lastRow = sheet ? sheet.getLastRow() : 0;
-  if (lastRow < 2) {
-    cache.putAll({ all_meta: '0' }, CACHE_TTL_SEC);
+  const chunkCount = parseInt(cached[metaKey], 10);
+  if (chunkCount === 0) {
     return [];
   }
+  if (chunkCount > 0 && chunkCount <= MAX_GOV_CHUNKS) {
+    const parts = [];
+    for (let i = 0; i < chunkCount; i++) {
+      const part = cached['gov_' + gov + '_' + i];
+      if (typeof part !== 'string') {
+        return null;
+      }
+      parts.push(part);
+    }
+    try {
+      return JSON.parse(parts.join(''));
+    } catch (_e) {
+      return null;
+    }
+  }
+  return null;
+}
 
-  const startRow = Math.max(2, lastRow - MAX_RECENT_ROWS + 1);
-  const numRows = lastRow - startRow + 1;
-  const colCount = Math.min(sheet.getLastColumn(), SHEET_HEADERS.length);
-  const rawRows = sheet.getRange(startRow, 1, numRows, colCount).getValues();
+/**
+ * Build chunked cache entries for a single governorate, trimming oldest rows if JSON exceeds
+ * MAX_GOV_CHUNKS * CHUNK_SIZE instead of silently bypassing the cache.
+ */
+function buildGovChunksObj_(gov, govRows) {
+  const rowsCopy = govRows.slice(0, MAX_GOV_RESULTS);
+  const maxChars = MAX_GOV_CHUNKS * CHUNK_SIZE;
+  let jsonStr = JSON.stringify(rowsCopy);
 
-  // Filter available in memory and sort newest first
-  const available = [];
-  for (let i = 0; i < rawRows.length; i++) {
-    const r = rawRows[i];
-    const status = String(r[COL.status] || '').trim().toLowerCase();
-    if (status === 'available' && r[COL.id]) {
-      available.push(r);
+  if (jsonStr.length > maxChars) {
+    logError_(
+      'WARN_CACHE_TRIM',
+      'buildGovChunksObj_:' + gov,
+      'Governorate JSON length ' + jsonStr.length + ' exceeded ' + maxChars + '; trimming oldest rows.'
+    );
+    while (rowsCopy.length > 0 && jsonStr.length > maxChars) {
+      rowsCopy.pop();
+      jsonStr = JSON.stringify(rowsCopy);
     }
   }
 
-  available.sort(function (a, b) {
-    return Number(b[COL.created_at] || 0) - Number(a[COL.created_at] || 0);
-  });
-
-  // Shrink each row to compact format: [id, t(sec), gov, city, lat, lng, type, cond, desc, photo, hc]
-  const compactRows = new Array(available.length);
-  for (let j = 0; j < available.length; j++) {
-    const row = available[j];
-    const rawContact = String(fromSafeText_(row[COL.contact]) || '').replace(/\D+/g, '');
-    compactRows[j] = [
-      String(row[COL.id]),
-      Math.floor(Number(row[COL.created_at] || 0) / 1000),
-      String(row[COL.governorate] || '').trim().toLowerCase(),
-      fromSafeText_(row[COL.city]).trim(),
-      Math.round(Number(row[COL.lat] || 0) * 1e5) / 1e5,
-      Math.round(Number(row[COL.lng] || 0) * 1e5) / 1e5,
-      String(row[COL.animal_type] || '').trim().toLowerCase(),
-      String(row[COL.condition] || '').trim().toLowerCase(),
-      fromSafeText_(row[COL.description]).trim().slice(0, 300),
-      String(row[COL.photo_id] || '').trim(),
-      Boolean(rawContact)
-    ];
+  const chunksObj = {};
+  if (rowsCopy.length === 0) {
+    chunksObj['gov_' + gov + '_meta'] = '0';
+    return { chunksObj: chunksObj, rows: rowsCopy };
   }
 
-  // Split JSON into 30,000-char chunks and store with ONE putAll
-  const jsonStr = JSON.stringify(compactRows);
-  const chunksObj = {};
   let chunkIndex = 0;
   for (let pos = 0; pos < jsonStr.length; pos += CHUNK_SIZE) {
-    chunksObj['all_' + chunkIndex] = jsonStr.slice(pos, pos + CHUNK_SIZE);
+    chunksObj['gov_' + gov + '_' + chunkIndex] = jsonStr.slice(pos, pos + CHUNK_SIZE);
     chunkIndex++;
   }
-  chunksObj.all_meta = String(chunkIndex);
-  cache.putAll(chunksObj, CACHE_TTL_SEC);
-
-  return compactRows;
+  chunksObj['gov_' + gov + '_meta'] = String(chunkIndex);
+  return { chunksObj: chunksObj, rows: rowsCopy };
 }
 
 /**
- * Invalidate all cache keys in ONE removeAll call.
+ * Read the last MAX_RECENT_ROWS (1500) rows in ONE getRange call, partition by governorate,
+ * sort newest first, cap at 100 per governorate, and store in CacheService with ONE putAll.
  */
-function invalidateCache_(cache) {
-  const c = cache || CacheService.getScriptCache();
-  c.removeAll(CACHE_KEYS);
+function rebuildAllGovCaches_(cache) {
+  const byGov = {};
+  for (let g = 0; g < VALID_GOVS.length; g++) {
+    byGov[VALID_GOVS[g]] = [];
+  }
+
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_PETS);
+  const lastRow = sheet ? sheet.getLastRow() : 0;
+
+  if (lastRow >= 2) {
+    const startRow = Math.max(2, lastRow - MAX_RECENT_ROWS + 1);
+    const numRows = lastRow - startRow + 1;
+    const colCount = Math.min(sheet.getLastColumn(), SHEET_HEADERS.length);
+    const rawRows = sheet.getRange(startRow, 1, numRows, colCount).getValues();
+
+    // Sort available rows newest first
+    const available = [];
+    for (let i = 0; i < rawRows.length; i++) {
+      const r = rawRows[i];
+      const status = String(r[COL.status] || '').trim().toLowerCase();
+      const rowGov = String(r[COL.governorate] || '').trim().toLowerCase();
+      if (status === 'available' && r[COL.id] && byGov[rowGov]) {
+        available.push(r);
+      }
+    }
+
+    available.sort(function (a, b) {
+      return Number(b[COL.created_at] || 0) - Number(a[COL.created_at] || 0);
+    });
+
+    for (let j = 0; j < available.length; j++) {
+      const row = available[j];
+      const rowGov = String(row[COL.governorate] || '').trim().toLowerCase();
+      const list = byGov[rowGov];
+      if (list && list.length < MAX_GOV_RESULTS) {
+        const rawContact = String(fromSafeText_(row[COL.contact]) || '').replace(/\D+/g, '');
+        list.push([
+          String(row[COL.id]),
+          Math.floor(Number(row[COL.created_at] || 0) / 1000),
+          rowGov,
+          fromSafeText_(row[COL.city]).trim(),
+          Math.round(Number(row[COL.lat] || 0) * 1e5) / 1e5,
+          Math.round(Number(row[COL.lng] || 0) * 1e5) / 1e5,
+          String(row[COL.animal_type] || '').trim().toLowerCase(),
+          String(row[COL.condition] || '').trim().toLowerCase(),
+          fromSafeText_(row[COL.description]).trim().slice(0, 300),
+          String(row[COL.photo_id] || '').trim(),
+          Boolean(rawContact)
+        ]);
+      }
+    }
+  }
+
+  const allChunksToPut = {};
+  for (let g = 0; g < VALID_GOVS.length; g++) {
+    const govId = VALID_GOVS[g];
+    const built = buildGovChunksObj_(govId, byGov[govId]);
+    byGov[govId] = built.rows;
+    const keys = Object.keys(built.chunksObj);
+    for (let k = 0; k < keys.length; k++) {
+      allChunksToPut[keys[k]] = built.chunksObj[keys[k]];
+    }
+  }
+
+  try {
+    cache.putAll(allChunksToPut, CACHE_TTL_SEC);
+  } catch (err) {
+    logError_('WARN_CACHE_PUTALL', 'rebuildAllGovCaches_', err);
+  }
+
+  return byGov;
 }
 
 /**
- * Archive job: moves rows where status === 'adopted' OR older than 60 days to the Archive sheet.
+ * Get cached compact rows for a governorate or rebuild safely using tryLock to prevent stampede.
+ */
+function getCachedOrBuildGovPets_(gov, forceFresh) {
+  const cache = CacheService.getScriptCache();
+  if (!forceFresh) {
+    const hit = readGovFromCache_(cache, gov);
+    if (hit !== null) {
+      return hit;
+    }
+  }
+
+  const lock = LockService.getScriptLock();
+  const gotLock = lock.tryLock(5000);
+  try {
+    if (gotLock && !forceFresh) {
+      const secondCheck = readGovFromCache_(cache, gov);
+      if (secondCheck !== null) {
+        return secondCheck;
+      }
+    }
+    const allByGov = rebuildAllGovCaches_(cache);
+    return allByGov[gov] || [];
+  } finally {
+    if (gotLock) {
+      lock.releaseLock();
+    }
+  }
+}
+
+/**
+ * Time-driven trigger (every 5 minutes) to warm per-governorate caches so users never hit a cold start.
+ */
+function warmCaches() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) return;
+  try {
+    rebuildAllGovCaches_(CacheService.getScriptCache());
+  } catch (err) {
+    logError_('ERR_WARM_CACHES', 'warmCaches', err);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Invalidate only the affected governorate's cache in ONE removeAll call.
+ */
+function invalidateGovCache_(cache, gov) {
+  const c = cache || CacheService.getScriptCache();
+  if (gov && VALID_GOVS.indexOf(gov) !== -1) {
+    c.removeAll(govCacheKeys_(gov));
+  } else {
+    c.removeAll(allGovCacheKeys_());
+  }
+}
+
+/**
+ * Invalidate all governorate caches in ONE removeAll call.
+ */
+function invalidateAllGovCaches_(cache) {
+  const c = cache || CacheService.getScriptCache();
+  c.removeAll(allGovCacheKeys_());
+}
+
+/**
+ * Daily archive job triggered at 03:00.
+ * Moves rows where status === 'adopted' OR older than 60 days to the Archive sheet,
+ * and trashes their Drive photos inside try/catch with a 4.5-minute time budget.
  */
 function archiveOld() {
+  const startMs = Date.now();
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
@@ -1154,7 +1382,17 @@ function archiveOld() {
 
       const createdAt = Number(row[COL.created_at] || 0);
       const status = String(row[COL.status] || '').trim().toLowerCase();
-      if (status === 'adopted' || (createdAt > 0 && createdAt < cutoffMs)) {
+      const shouldArchive = status === 'adopted' || (createdAt > 0 && createdAt < cutoffMs);
+
+      if (shouldArchive && Date.now() - startMs < ARCHIVE_TIME_BUDGET_MS) {
+        const photoId = String(row[COL.photo_id] || '').trim();
+        if (photoId) {
+          try {
+            DriveApp.getFileById(photoId).setTrashed(true);
+          } catch (_trashErr) {
+            // Continue even if file was already deleted or inaccessible
+          }
+        }
         move.push(row);
       } else {
         keep.push(row);
@@ -1175,7 +1413,7 @@ function archiveOld() {
       petsSheet.getRange(2, 1, keep.length, SHEET_HEADERS.length).setValues(keep);
     }
 
-    invalidateCache_(CacheService.getScriptCache());
+    invalidateAllGovCaches_(CacheService.getScriptCache());
   } finally {
     lock.releaseLock();
   }

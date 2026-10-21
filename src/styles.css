@@ -1962,6 +1962,46 @@ a.action-btn.btn-maps:hover {
   font-weight: 600;
 }
 
+.offline-failed-list {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.offline-failed-title {
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: #991b1b;
+}
+
+.offline-failed-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #fef2f2;
+  border: 1px solid #fca5a5;
+  color: #991b1b;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.btn-discard-failed {
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid #fca5a5;
+  background: #ffffff;
+  color: #991b1b;
+  font-family: inherit;
+  font-size: 0.76rem;
+  font-weight: 700;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
 .btn-sync-queue {
   min-height: 38px;
   padding: 6px 14px;

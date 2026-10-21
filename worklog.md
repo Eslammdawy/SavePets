@@ -200,3 +200,47 @@ The application is engineered with extreme performance and quota discipline:
 - [ ] **Geospatial Edge Database**: Upgrade Google Sheets to Cloudflare D1 or Supabase for indexed spatial radius queries (e.g. "Find pets within 5 km of my current location").
 - [ ] **PWA & Service Worker**: Add `manifest.json` and a Service Worker for offline app shell caching and background sync capabilities.
 - [ ] **Reporter Verification PIN**: Issue an automated 4-digit PIN upon submission to prevent unauthorized closing of open rescue cases.
+
+
+---
+
+### Phase 4: Security, Reliability & Performance Hardening (October 21, 2026)
+
+#### 1. Security & Privacy Hardening (Phase 1)
+- **Phone Number Harvesting Protection**:
+  - Removed raw `contact` phone numbers from `/api/list` responses and replaced them with a boolean `hc` (`hasContact`) flag in `COMPACT_HEADERS`.
+  - Added `edge-functions/api/contact.js` (`GET /api/contact?id=<petId>`) and `handleGetContact_` in `Code.gs` with strict per-IP rate limiting (`10 lookups / 10 minutes / IP`) and `Cache-Control: no-store`.
+  - Updated `src/PetCard.jsx` to open a blank tab synchronously on click and populate the `https://wa.me/...` URL after fetching digits on demand, avoiding popup blockers and never persisting raw phone numbers in `localStorage` or `sessionStorage`.
+- **Spreadsheet Formula-Injection Prevention**:
+  - Added `safeText_` and `fromSafeText_` in `Code.gs` (and mirrored in `src/sanitize.js`) to prefix values starting with `=`, `+`, `-`, `@`, `\t`, `\r`, or `\n` with a leading apostrophe (`'`) before writing to Google Sheets, and formatted text columns as plain text (`@`).
+- **PIN-Protected `markAdopted` & Community `reportAdopted`**:
+  - Added `pin_hash` (column 13) to `SHEET_HEADERS` and salted SHA-256 verification (`PIN_SALT`) with per-pet attempt limiting in `Code.gs`.
+  - Generated a 4-digit reporter PIN on submission, stored in `localStorage` (`sp_my_pets_v1`) on the reporting device.
+  - Restricted direct `"Mark as adopted"` strictly to the original reporting device; other devices display `"Report as adopted"` (`reportAdopted` action logged to the `Reports` sheet).
+- **Edge-Verified Rate Limiting & Shared Secret**:
+  - Updated Edge Functions (`post.js`, `contact.js`) to extract the real client IP (`context.clientIp` / `request.eo.clientIp` / `eo-connecting-ip`), derive a salted SHA-256 `_ip` key using `RATE_LIMIT_SALT`, and attach `_secret` (`EDGE_SHARED_SECRET`).
+  - Added Egypt coordinate bounding-box validation, base64 magic-byte MIME detection (`image/jpeg`, `image/png`, `image/webp`), comment `petId` existence verification, structured `Logs` sheet error logging, and moved `FOLDER_ID` to Script Properties.
+
+#### 2. Data Reliability & Backend Scalability (Phase 2)
+- **Upstream Response Validation & Edge Cache API**:
+  - Updated `edge-functions/api/list.js` to validate `{ ok: true }` before caching, return `502` with `Cache-Control: no-store` on upstream failures, use EdgeOne's `caches.default` Cache API with normalized cache keys (`gov`), and support `?fresh=1` cache bypass.
+- **Immediate Post-Submit UI Consistency**:
+  - Returned the newly created compact pet record in `add` responses and prepended it directly into the client cache (`prependPetToClientCache`) so newly submitted pets appear immediately on switch to `AdoptView`.
+- **Offline Queue Idempotency & Concurrency**:
+  - Rewrote `src/offlineQueue.js` with client-generated UUIDs (`payload.id`), server-side idempotency checks in `Code.gs`, a 15-item cap, quota-error reporting, single-flight `flushOfflineQueue` locking, non-destructive per-item queue removal, and a permanent `failed` list with a Discard banner in `src/App.jsx`.
+- **Shared Comments Endpoint**:
+  - Created `edge-functions/api/comments.js` (`GET /api/comments?petId=<id>`) backed by `TextFinder` + bounded `getRange` and 60s per-pet `CacheService` in `Code.gs`, wired into `src/comments.js` and `src/PetCard.jsx`.
+- **Per-Governorate Caching & Drive Cleanup**:
+  - Upgraded `Code.gs` to cache per-governorate slices (`gov_<id>_*`) over a 1,500-row scan window with overflow archiving, added a 5-minute `warmCaches` trigger, and updated `archiveOld()` to run daily with a 4.5-minute execution budget and trash archived Drive photos.
+- **Client Fetch Hardening & Bookmark Reconciliation**:
+  - Added `AbortController` timeouts (15s list, 30s post), in-flight GET deduplication, latest-request-wins guard in `AdoptView`, optimistic rollback on failed `markAdopted`, and automatic bookmark reconciliation (`reconcileSavedPetsForGov`).
+
+#### 3. Performance, Progressive Enhancement & Tooling (Phase 3)
+- **Leaflet Map Effect Split & SRI**:
+  - Split `src/PetMapView.jsx` into 3 focused effects (instance init, marker sync, center/zoom sync), added Subresource Integrity (`integrity` + `crossOrigin="anonymous"`) to Leaflet 1.9.4 CDN tags, and surfaced a bilingual retry UI on load failure.
+- **Self-Hosted Fonts & GPU Compositing**:
+  - Self-hosted subsetted Cairo Variable `.woff2` fonts (`public/fonts/`), removed third-party Google Fonts requests, and eliminated per-card `backdrop-filter` blur layers in `src/styles.css`.
+- **Edge Image Proxy & CORS-Safe Rescue Posters**:
+  - Added `edge-functions/api/img.js` (`/api/img?id=<photo_id>&sz=w400`) with 30-day immutable edge caching and `Access-Control-Allow-Origin: *`, enabling `src/RescuePosterModal.jsx` to render real pet photos onto the HTML5 Canvas without Drive CORS failures.
+- **Code Splitting, Error Boundary, Service Worker & CI**:
+  - Lazy-loaded `PetMapView`, `RescuePosterModal`, and `FirstAidModal` via `React.lazy` + `<Suspense>`, wrapped views in `src/ErrorBoundary.jsx`, implemented `createImageBitmap` downscaling in `src/imageCompress.js`, registered `public/sw.js` for app-shell and `/api/img` caching, and added ESLint, Prettier, Vitest unit tests (`src/__tests__/app.test.js`), and GitHub Actions CI (`.github/workflows/ci.yml`).

@@ -8,7 +8,7 @@ import { DICT } from './i18n';
 import { compressImageFile } from './imageCompress';
 import { submitPetReport, generateUuid } from './api';
 import { enqueueOfflineReport } from './offlineQueue';
-import { FirstAidInlineCard } from './FirstAidModal';
+import { FirstAidInlineCard } from './FirstAidInlineCard';
 
 const TYPE_OPTIONS = [
   { key: 'dog', icon: '🐕' },

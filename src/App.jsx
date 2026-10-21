@@ -1,14 +1,16 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { DICT } from './i18n';
 import ShareView from './ShareView';
 import AdoptView from './AdoptView';
-import FirstAidModal from './FirstAidModal';
+import ErrorBoundary from './ErrorBoundary';
 import {
   getOfflineQueue,
   flushOfflineQueue,
   getFailedOfflineReports,
   discardFailedOfflineReport
 } from './offlineQueue';
+
+const FirstAidModal = lazy(() => import('./FirstAidModal'));
 
 const LANG_STORAGE_KEY = 'sp_lang_v1';
 
@@ -308,7 +310,19 @@ export default function App() {
 
       {/* Emergency First-Aid & Shelter Directory Modal */}
       {firstAidOpen && (
-        <FirstAidModal lang={lang} onClose={() => setFirstAidOpen(false)} />
+        <ErrorBoundary lang={lang} onReset={() => setFirstAidOpen(false)}>
+          <Suspense
+            fallback={
+              <div className="modal-backdrop" role="status" aria-busy="true">
+                <div className="surface-card modal-box">
+                  <p className="empty-state-text">{t.searchingBtn}</p>
+                </div>
+              </div>
+            }
+          >
+            <FirstAidModal lang={lang} onClose={() => setFirstAidOpen(false)} />
+          </Suspense>
+        </ErrorBoundary>
       )}
     </div>
   );

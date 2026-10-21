@@ -1,10 +1,12 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { GOVERNORATES, getGovernorateName, formatDistance } from './governorates';
 import { DICT } from './i18n';
 import PetCard from './PetCard';
 
 const LEAFLET_CSS_URL = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+const LEAFLET_CSS_SRI = 'sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=';
 const LEAFLET_JS_URL = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+const LEAFLET_JS_SRI = 'sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=';
 
 function loadLeafletAssets() {
   if (typeof window !== 'undefined' && window.L) {
@@ -16,6 +18,8 @@ function loadLeafletAssets() {
       const link = document.createElement('link');
       link.rel = 'stylesheet';
       link.href = LEAFLET_CSS_URL;
+      link.integrity = LEAFLET_CSS_SRI;
+      link.crossOrigin = '';
       document.head.appendChild(link);
     }
 
@@ -28,6 +32,8 @@ function loadLeafletAssets() {
 
     const script = document.createElement('script');
     script.src = LEAFLET_JS_URL;
+    script.integrity = LEAFLET_JS_SRI;
+    script.crossOrigin = '';
     script.async = true;
     script.onload = () => resolve(window.L);
     script.onerror = reject;
@@ -40,6 +46,17 @@ function getPinColorClass(cond) {
   if (cond === 'pregnant') return 'pin-pregnant';
   if (cond === 'healthy') return 'pin-healthy';
   return 'pin-unsure';
+}
+
+function buildPetDivIcon(L, pet, isSelected) {
+  const emoji = pet.type === 'cat' ? '🐈' : '🐕';
+  const colorClass = getPinColorClass(pet.cond);
+  return L.divIcon({
+    className: 'sp-map-div-icon',
+    html: `<div class="sp-map-pin ${colorClass} ${isSelected ? 'is-selected-pin' : ''}"><span>${emoji}</span></div>`,
+    iconSize: [42, 42],
+    iconAnchor: [21, 21]
+  });
 }
 
 export default function PetMapView({
@@ -56,9 +73,35 @@ export default function PetMapView({
   const mapContainerRef = useRef(null);
   const mapInstanceRef = useRef(null);
   const markersLayerRef = useRef(null);
+  const markersByIdRef = useRef(new Map());
+  const petsByIdRef = useRef(new Map());
+  const prevSelectedIdRef = useRef(null);
+  const lastFittedIdsSignatureRef = useRef('');
 
-  const [leafletReady, setLeafletReady] = useState(Boolean(typeof window !== 'undefined' && window.L));
-  const [selectedPetId, setSelectedPetId] = useState(() => (pets[0] && pets[0].id) || null);
+  const [leafletReady, setLeafletReady] = useState(
+    Boolean(typeof window !== 'undefined' && window.L)
+  );
+  const [leafletError, setLeafletError] = useState(false);
+  const [selectedPetId, setSelectedPetId] = useState(
+    () => (pets[0] && pets[0].id) || null
+  );
+
+  // Stable signature of pet IDs so markers and fitBounds only rebuild when the ID set changes
+  const petIdsSignature = useMemo(
+    () => (Array.isArray(pets) ? pets.map((p) => p.id).join(',') : ''),
+    [pets]
+  );
+
+  // Keep a latest lookup map of pet objects by ID
+  useEffect(() => {
+    const map = new Map();
+    if (Array.isArray(pets)) {
+      for (const p of pets) {
+        if (p && p.id) map.set(p.id, p);
+      }
+    }
+    petsByIdRef.current = map;
+  }, [pets]);
 
   // Keep selectedPetId valid when pets list changes
   useEffect(() => {
@@ -69,17 +112,23 @@ export default function PetMapView({
     if (!pets.some((p) => p.id === selectedPetId)) {
       setSelectedPetId(pets[0].id);
     }
-  }, [pets, selectedPetId]);
+  }, [petIdsSignature, pets, selectedPetId]);
 
   // Load Leaflet once
   useEffect(() => {
     let mounted = true;
+    setLeafletError(false);
     loadLeafletAssets()
       .then(() => {
-        if (mounted) setLeafletReady(true);
+        if (mounted) {
+          setLeafletReady(true);
+          setLeafletError(false);
+        }
       })
       .catch(() => {
-        // Fallback still renders interactive list selector
+        if (mounted) {
+          setLeafletError(true);
+        }
       });
     return () => {
       mounted = false;
@@ -115,10 +164,11 @@ export default function PetMapView({
       map.remove();
       mapInstanceRef.current = null;
       markersLayerRef.current = null;
+      markersByIdRef.current.clear();
     };
-  }, [leafletReady]);
+  }, [leafletReady, selectedGov, userCoords]);
 
-  // Sync markers whenever pets, userCoords, or selectedPetId change
+  // Effect 1: Rebuild markers and fitBounds ONLY when the pet ID list or userCoords change
   useEffect(() => {
     const L = window.L;
     const map = mapInstanceRef.current;
@@ -126,49 +176,83 @@ export default function PetMapView({
     if (!L || !map || !layer) return;
 
     layer.clearLayers();
+    markersByIdRef.current.clear();
     const boundsPoints = [];
 
-    if (userCoords && Number.isFinite(userCoords.lat) && Number.isFinite(userCoords.lng)) {
+    const userLat = userCoords && Number(userCoords.lat);
+    const userLng = userCoords && Number(userCoords.lng);
+    if (Number.isFinite(userLat) && Number.isFinite(userLng)) {
       const userIcon = L.divIcon({
         className: 'sp-map-div-icon',
         html: `<div class="sp-map-pin pin-user" title="${t.mapLegendYou}">📍</div>`,
         iconSize: [36, 36],
         iconAnchor: [18, 18]
       });
-      L.marker([userCoords.lat, userCoords.lng], { icon: userIcon }).addTo(layer);
-      boundsPoints.push([userCoords.lat, userCoords.lng]);
+      L.marker([userLat, userLng], { icon: userIcon }).addTo(layer);
+      boundsPoints.push([userLat, userLng]);
     }
 
-    pets.forEach((pet) => {
+    const currentPets = Array.from(petsByIdRef.current.values());
+    currentPets.forEach((pet) => {
       const lat = Number(pet.lat);
       const lng = Number(pet.lng);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
 
       boundsPoints.push([lat, lng]);
       const isSelected = pet.id === selectedPetId;
-      const emoji = pet.type === 'cat' ? '🐈' : '🐕';
-      const colorClass = getPinColorClass(pet.cond);
-
-      const icon = L.divIcon({
-        className: 'sp-map-div-icon',
-        html: `<div class="sp-map-pin ${colorClass} ${isSelected ? 'is-selected-pin' : ''}"><span>${emoji}</span></div>`,
-        iconSize: [42, 42],
-        iconAnchor: [21, 21]
-      });
+      const icon = buildPetDivIcon(L, pet, isSelected);
 
       const marker = L.marker([lat, lng], { icon }).addTo(layer);
       marker.on('click', () => {
         setSelectedPetId(pet.id);
         map.flyTo([lat, lng], Math.max(map.getZoom(), 14), { duration: 0.5 });
       });
+      markersByIdRef.current.set(pet.id, marker);
     });
 
-    if (boundsPoints.length === 1) {
-      map.setView(boundsPoints[0], 14);
-    } else if (boundsPoints.length > 1) {
-      map.fitBounds(boundsPoints, { padding: [42, 42], maxZoom: 15 });
+    prevSelectedIdRef.current = selectedPetId;
+
+    const coordsSig =
+      Number.isFinite(userLat) && Number.isFinite(userLng)
+        ? `${userLat},${userLng}`
+        : '';
+    const fullSig = `${petIdsSignature}|${coordsSig}`;
+    if (lastFittedIdsSignatureRef.current !== fullSig) {
+      lastFittedIdsSignatureRef.current = fullSig;
+      if (boundsPoints.length === 1) {
+        map.setView(boundsPoints[0], 14);
+      } else if (boundsPoints.length > 1) {
+        map.fitBounds(boundsPoints, { padding: [42, 42], maxZoom: 15 });
+      }
     }
-  }, [pets, userCoords, leafletReady, t.mapLegendYou]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [petIdsSignature, userCoords, leafletReady, t.mapLegendYou]);
+
+  // Effect 2: Update ONLY the selected marker style when selectedPetId changes
+  useEffect(() => {
+    const L = window.L;
+    if (!L) return;
+    const prevId = prevSelectedIdRef.current;
+    if (prevId === selectedPetId) return;
+
+    if (prevId && markersByIdRef.current.has(prevId)) {
+      const prevMarker = markersByIdRef.current.get(prevId);
+      const prevPet = petsByIdRef.current.get(prevId);
+      if (prevMarker && prevPet) {
+        prevMarker.setIcon(buildPetDivIcon(L, prevPet, false));
+      }
+    }
+
+    if (selectedPetId && markersByIdRef.current.has(selectedPetId)) {
+      const nextMarker = markersByIdRef.current.get(selectedPetId);
+      const nextPet = petsByIdRef.current.get(selectedPetId);
+      if (nextMarker && nextPet) {
+        nextMarker.setIcon(buildPetDivIcon(L, nextPet, true));
+      }
+    }
+
+    prevSelectedIdRef.current = selectedPetId;
+  }, [selectedPetId, leafletReady]);
 
   function handleSelectPetPin(pet) {
     setSelectedPetId(pet.id);
@@ -207,8 +291,15 @@ export default function PetMapView({
           )}
         </div>
 
-        {/* Leaflet Map Canvas */}
-        <div ref={mapContainerRef} className="sp-leaflet-container" />
+        {/* Visible Error Message if Leaflet Fails to Load */}
+        {leafletError ? (
+          <div className="alert-box alert-error" role="alert" style={{ marginBottom: 12 }}>
+            <span aria-hidden="true">⚠️</span>
+            <span>{t.mapLoadError}</span>
+          </div>
+        ) : (
+          <div ref={mapContainerRef} className="sp-leaflet-container" />
+        )}
 
         {/* Quick Pet Pin Selector Strip */}
         <div className="map-pin-strip">

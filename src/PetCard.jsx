@@ -1,8 +1,18 @@
-import React, { useState, useEffect } from 'react';
-import { getDrivePhotoUrl, fetchPetContact, hasPetPin, reportPetAdopted } from './api';
+import React, { useState, useEffect, memo } from 'react';
+import {
+  getDrivePhotoUrl,
+  getDirectDrivePhotoUrl,
+  fetchPetContact,
+  hasPetPin,
+  reportPetAdopted
+} from './api';
 import { getGovernorateName, formatDistance } from './governorates';
-import { DICT, formatTimeAgo, buildWhatsAppUrl } from './i18n';
-import { sharePetCaseNative } from './RescuePosterModal';
+import {
+  DICT,
+  formatTimeAgo,
+  buildWhatsAppUrl,
+  sharePetCaseNative
+} from './i18n';
 import { loadPetComments, addPetComment, syncPetComments } from './comments';
 
 const TRUNCATE_LENGTH = 120;
@@ -20,7 +30,7 @@ const TYPE_ICONS = {
   cat: '🐈'
 };
 
-export default function PetCard({
+function PetCard({
   pet,
   lang,
   distanceKm = null,
@@ -30,6 +40,7 @@ export default function PetCard({
   onMarkAdopted
 }) {
   const [imgLoaded, setImgLoaded] = useState(false);
+  const [imgFallbackUsed, setImgFallbackUsed] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
@@ -43,8 +54,8 @@ export default function PetCard({
   const [reportedForReview, setReportedForReview] = useState(false);
   const [adoptionActionError, setAdoptionActionError] = useState('');
 
-  // Comments & Follow-up State
-  const [comments, setComments] = useState(() => loadPetComments(pet.id));
+  // Comments & Follow-up State (loaded lazily when tray opens, not on mount)
+  const [comments, setComments] = useState([]);
   const [showComments, setShowComments] = useState(false);
   const [loadingRemoteComments, setLoadingRemoteComments] = useState(false);
   const [authorInput, setAuthorInput] = useState('');
@@ -56,8 +67,9 @@ export default function PetCard({
 
   const isOwner = hasPetPin(pet.id);
 
-  // Keep comments in sync when comments change across components or tabs
+  // Keep comments in sync when comments change across components or tabs while tray is open
   useEffect(() => {
+    if (!showComments) return undefined;
     function handleCommentsChanged(e) {
       if (!e.detail || e.detail.petId === pet.id) {
         setComments(loadPetComments(pet.id));
@@ -67,12 +79,14 @@ export default function PetCard({
     return () => {
       window.removeEventListener('sp-comments-changed', handleCommentsChanged);
     };
-  }, [pet.id]);
+  }, [pet.id, showComments]);
 
-  // Fetch comments from server lazily when the comment tray opens
+  // Lazily load local comments & fetch server comments when the comment tray opens
   useEffect(() => {
-    if (!showComments || !pet.id) return;
+    if (!showComments || !pet.id) return undefined;
     let active = true;
+    const localInitial = loadPetComments(pet.id);
+    setComments(localInitial);
     setLoadingRemoteComments(true);
     syncPetComments(pet.id)
       .then((merged) => {
@@ -109,7 +123,10 @@ export default function PetCard({
   const condClass = `cond-${condKey}`;
   const isUrgent = condKey === 'injured' || condKey === 'sick';
 
-  const photoUrl = getDrivePhotoUrl(pet.photo);
+  const primaryPhotoUrl = getDrivePhotoUrl(pet.photo);
+  const fallbackPhotoUrl = getDirectDrivePhotoUrl(pet.photo);
+  const photoUrl = imgFallbackUsed ? fallbackPhotoUrl : primaryPhotoUrl;
+
   const timeAgo = formatTimeAgo(pet.t, lang);
   const distanceLabel = formatDistance(distanceKm, lang);
   const mapsUrl = `https://www.google.com/maps?q=${encodeURIComponent(`${pet.lat},${pet.lng}`)}`;
@@ -223,10 +240,17 @@ export default function PetCard({
           <img
             src={photoUrl}
             alt={`${typeLabel} - ${locationLabel}`}
+            width="400"
+            height="300"
             loading="lazy"
             decoding="async"
             className={`pet-photo ${imgLoaded ? 'is-loaded' : ''}`}
             onLoad={() => setImgLoaded(true)}
+            onError={() => {
+              if (!imgFallbackUsed && fallbackPhotoUrl && fallbackPhotoUrl !== primaryPhotoUrl) {
+                setImgFallbackUsed(true);
+              }
+            }}
           />
         )}
 
@@ -297,7 +321,7 @@ export default function PetCard({
             >
               <span aria-hidden="true">💬</span>
               <span>
-                {comments.length > 0
+                {showComments && comments.length > 0
                   ? `${comments.length} ${t.commentsCountLabel(comments.length)}`
                   : t.addFollowUpBtn}
               </span>
@@ -563,3 +587,5 @@ export default function PetCard({
     </article>
   );
 }
+
+export default memo(PetCard);

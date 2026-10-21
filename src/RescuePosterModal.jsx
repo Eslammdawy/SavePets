@@ -1,7 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { getDrivePhotoUrl } from './api';
 import { getGovernorateName } from './governorates';
-import { DICT, buildAutoSummary, formatTimeAgo } from './i18n';
+import {
+  DICT,
+  formatTimeAgo,
+  buildShareText,
+  sharePetCaseNative
+} from './i18n';
+
+export { buildShareText, sharePetCaseNative };
 
 const COND_COLORS = {
   injured: { bg: '#dc2626', soft: '#fef2f2', text: '#991b1b', emoji: '🩹' },
@@ -10,63 +17,6 @@ const COND_COLORS = {
   healthy: { bg: '#16a34a', soft: '#f0fdf4', text: '#166534', emoji: '💚' },
   unsure: { bg: '#57534e', soft: '#f5f5f4', text: '#44403c', emoji: '🐾' }
 };
-
-/**
- * Build shareable text summary + Google Maps link for a pet report.
- */
-export function buildShareText(pet, lang = 'ar') {
-  const summary = buildAutoSummary(pet, lang);
-  const mapsUrl = `https://www.google.com/maps?q=${encodeURIComponent(`${pet.lat},${pet.lng}`)}`;
-  const desc = String(pet.desc || '').trim();
-
-  if (lang === 'ar') {
-    return [
-      `🐾 نداء إنقاذ عبر تطبيق Street Pets Egypt`,
-      summary,
-      desc ? `📝 التفاصيل: ${desc}` : '',
-      `📍 الموقع على الخريطة: ${mapsUrl}`
-    ]
-      .filter(Boolean)
-      .join('\n');
-  }
-
-  return [
-    `🐾 Street Pets Egypt — Rescue Alert`,
-    summary,
-    desc ? `📝 Details: ${desc}` : '',
-    `📍 Exact GPS Location: ${mapsUrl}`
-  ]
-    .filter(Boolean)
-    .join('\n');
-}
-
-/**
- * Trigger native Web Share API or copy to clipboard as fallback.
- */
-export async function sharePetCaseNative(pet, lang = 'ar') {
-  const text = buildShareText(pet, lang);
-  const mapsUrl = `https://www.google.com/maps?q=${encodeURIComponent(`${pet.lat},${pet.lng}`)}`;
-
-  if (navigator.share) {
-    try {
-      await navigator.share({
-        title: 'Street Pets Egypt',
-        text,
-        url: mapsUrl
-      });
-      return { shared: true, copied: false };
-    } catch (_err) {
-      // User cancelled or share failed; fall back to clipboard
-    }
-  }
-
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    await navigator.clipboard.writeText(text);
-    return { shared: false, copied: true };
-  }
-
-  return { shared: false, copied: false };
-}
 
 /**
  * Wrap multiline text onto canvas context.
@@ -99,6 +49,20 @@ function drawWrappedText(ctx, text, x, y, maxWidth, lineHeight, maxLines = 4) {
     currentY += lineHeight;
   }
   return currentY;
+}
+
+async function ensurePosterFontsLoaded() {
+  if (typeof document !== 'undefined' && document.fonts && typeof document.fonts.load === 'function') {
+    try {
+      await Promise.all([
+        document.fonts.load('800 44px Cairo'),
+        document.fonts.load('700 28px Cairo'),
+        document.fonts.load('600 30px Cairo')
+      ]);
+    } catch (_e) {
+      // Proceed with fallback font if font loading API fails
+    }
+  }
 }
 
 export default function RescuePosterModal({ pet, lang, onClose }) {
@@ -147,7 +111,7 @@ export default function RescuePosterModal({ pet, lang, onClose }) {
 
       ctx.fillStyle = '#ffffff';
       ctx.textAlign = 'center';
-      ctx.font = '800 44px "Cairo", "Plus Jakarta Sans", sans-serif';
+      ctx.font = '800 44px "Cairo", sans-serif';
       const bannerTitle =
         condKey === 'healthy'
           ? lang === 'ar'
@@ -187,7 +151,7 @@ export default function RescuePosterModal({ pet, lang, onClose }) {
         const drawY = boxY + (boxH - drawH) / 2;
         ctx.drawImage(loadedImg, drawX, drawY, drawW, drawH);
       } else {
-        // Warm gradient hero illustration when Drive CORS blocks raw pixel access
+        // Fallback illustration if image cannot be fetched
         const grad = ctx.createLinearGradient(boxX, boxY, boxX + boxW, boxY + boxH);
         grad.addColorStop(0, palette.soft);
         grad.addColorStop(1, '#f3ece1');
@@ -199,11 +163,11 @@ export default function RescuePosterModal({ pet, lang, onClose }) {
         ctx.fillText(typeEmoji, W / 2, boxY + 230);
 
         ctx.fillStyle = palette.text;
-        ctx.font = '800 36px "Cairo", "Plus Jakarta Sans", sans-serif';
+        ctx.font = '800 36px "Cairo", sans-serif';
         ctx.fillText(`${palette.emoji} ${condLabel} • ${typeLabel}`, W / 2, boxY + 340);
 
         ctx.fillStyle = '#57534e';
-        ctx.font = '700 28px "Cairo", "Plus Jakarta Sans", sans-serif';
+        ctx.font = '700 28px "Cairo", sans-serif';
         ctx.fillText(`🕒 ${timeAgo}`, W / 2, boxY + 395);
       }
       ctx.restore();
@@ -211,7 +175,7 @@ export default function RescuePosterModal({ pet, lang, onClose }) {
       // 5. Location Pill & Headline
       ctx.fillStyle = '#1c1917';
       ctx.textAlign = 'center';
-      ctx.font = '800 44px "Cairo", "Plus Jakarta Sans", sans-serif';
+      ctx.font = '800 44px "Cairo", sans-serif';
       const headline =
         condKey === 'healthy'
           ? t.cardTitleAdopt(typeLabel)
@@ -228,7 +192,7 @@ export default function RescuePosterModal({ pet, lang, onClose }) {
       ctx.stroke();
 
       ctx.fillStyle = '#e5533d';
-      ctx.font = '800 34px "Cairo", "Plus Jakarta Sans", sans-serif';
+      ctx.font = '800 34px "Cairo", sans-serif';
       ctx.fillText(`📍 ${locationLabel}`, W / 2, 829);
 
       // 6. Description Box
@@ -239,43 +203,47 @@ export default function RescuePosterModal({ pet, lang, onClose }) {
           : 'Exact GPS location pinned. Please help rescue or share with local groups.');
 
       ctx.fillStyle = '#57534e';
-      ctx.font = '600 30px "Cairo", "Plus Jakarta Sans", sans-serif';
+      ctx.font = '600 30px "Cairo", sans-serif';
       drawWrappedText(ctx, descText, W / 2, 915, W - 240, 44, 3);
 
       // 7. GPS Coordinates Footer inside Card
       ctx.fillStyle = '#78716c';
-      ctx.font = '700 26px "Plus Jakarta Sans", monospace';
+      ctx.font = '700 26px "Cairo", monospace';
       ctx.fillText(`GPS: ${pet.lat}, ${pet.lng}`, W / 2, 1110);
 
       // 8. Bottom Branding Bar
       ctx.fillStyle = '#1c1917';
-      ctx.font = '800 30px "Cairo", "Plus Jakarta Sans", sans-serif';
+      ctx.font = '800 30px "Cairo", sans-serif';
       ctx.fillText('🐾 Street Pets Egypt — أنقذ وتبنَّ حيوانات الشارع في مصر', W / 2, H - 52);
 
       setPosterReady(true);
     }
 
-    const photoUrl = getDrivePhotoUrl(pet.photo);
-    if (!photoUrl) {
-      renderCard(null);
-      return;
-    }
+    (async () => {
+      await ensurePosterFontsLoaded();
+      if (cancelled) return;
 
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      try {
-        renderCard(img);
-        // Verify canvas is not tainted
-        canvas.toDataURL('image/png');
-      } catch (_e) {
+      const photoUrl = getDrivePhotoUrl(pet.photo);
+      if (!photoUrl) {
         renderCard(null);
+        return;
       }
-    };
-    img.onerror = () => {
-      renderCard(null);
-    };
-    img.src = photoUrl;
+
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        try {
+          renderCard(img);
+          canvas.toDataURL('image/png');
+        } catch (_e) {
+          renderCard(null);
+        }
+      };
+      img.onerror = () => {
+        renderCard(null);
+      };
+      img.src = photoUrl;
+    })();
 
     return () => {
       cancelled = true;

@@ -1,4 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useMemo,
+  useCallback,
+  lazy,
+  Suspense
+} from 'react';
 import {
   GOVERNORATES,
   reverseGeocodeLocation,
@@ -20,8 +28,10 @@ import {
   reconcileSavedPetsForGov
 } from './bookmarks';
 import PetCard from './PetCard';
-import PetMapView from './PetMapView';
-import RescuePosterModal from './RescuePosterModal';
+import ErrorBoundary from './ErrorBoundary';
+
+const PetMapView = lazy(() => import('./PetMapView'));
+const RescuePosterModal = lazy(() => import('./RescuePosterModal'));
 
 const PAGE_SIZE = 12;
 const POPULAR_GOV_IDS = ['cairo', 'giza', 'alexandria', 'qalyubia', 'dakahlia', 'sharkia'];
@@ -63,80 +73,102 @@ export default function AdoptView({ lang, adoptTrigger = 0, petAddedEvent = null
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const latestSearchSeqRef = useRef(0);
+  const filterStateRef = useRef({ cityInput: '', typeInput: '' });
 
-  const savedIds = new Set(savedPets.map((item) => item.id));
+  useEffect(() => {
+    filterStateRef.current = { cityInput, typeInput };
+  }, [cityInput, typeInput]);
 
-  async function runSearchForGov(
-    govToSearch,
-    cityVal = cityInput,
-    typeVal = typeInput,
-    options = {}
-  ) {
-    setErrorMsg('');
+  const savedIds = useMemo(
+    () => new Set(savedPets.map((item) => item.id)),
+    [savedPets]
+  );
 
-    if (!govToSearch) {
-      setErrorMsg(t.selectGovPrompt);
-      if (govSelectRef.current) {
-        govSelectRef.current.focus();
-      }
-      return;
-    }
+  const runSearchForGov = useCallback(
+    async (
+      govToSearch,
+      cityVal = filterStateRef.current.cityInput,
+      typeVal = filterStateRef.current.typeInput,
+      options = {}
+    ) => {
+      setErrorMsg('');
 
-    const reqSeq = ++latestSearchSeqRef.current;
-
-    // If we already have an optimistic/cached list in memory (e.g. right after submitting a report), render it immediately
-    const immediateCached = getFreshCachedList(govToSearch);
-    if (Array.isArray(immediateCached) && immediateCached.length > 0 && options.renderImmediate) {
-      setGovPets(immediateCached);
-      setSearchedGov(govToSearch);
-      setAppliedCity(cityVal.trim().toLowerCase());
-      setAppliedType(typeVal);
-      setPage(1);
-    } else {
-      setLoading(true);
-    }
-
-    try {
-      const list = await fetchPetsByGovernorate(govToSearch, options);
-      // Latest-request-wins: ignore responses for an outdated governorate search
-      if (reqSeq !== latestSearchSeqRef.current) {
+      if (!govToSearch) {
+        setErrorMsg(t.selectGovPrompt);
+        if (govSelectRef.current) {
+          govSelectRef.current.focus();
+        }
         return;
       }
-      setGovPets(list);
-      setSearchedGov(govToSearch);
-      setAppliedCity(cityVal.trim().toLowerCase());
-      setAppliedType(typeVal);
-      setPage(1);
-      setSavedPets((prev) => reconcileSavedPetsForGov(prev, govToSearch, list));
-    } catch (err) {
-      if (reqSeq !== latestSearchSeqRef.current) {
-        return;
+
+      const reqSeq = ++latestSearchSeqRef.current;
+
+      // If we already have an optimistic/cached list in memory (e.g. right after submitting a report), render it immediately
+      const immediateCached = getFreshCachedList(govToSearch);
+      if (
+        Array.isArray(immediateCached) &&
+        immediateCached.length > 0 &&
+        options.renderImmediate
+      ) {
+        setGovPets(immediateCached);
+        setSearchedGov(govToSearch);
+        setAppliedCity(cityVal.trim().toLowerCase());
+        setAppliedType(typeVal);
+        setPage(1);
+      } else {
+        setLoading(true);
       }
-      setErrorMsg(err.message || 'Failed to fetch pets.');
-    } finally {
-      if (reqSeq === latestSearchSeqRef.current) {
-        setLoading(false);
+
+      try {
+        const list = await fetchPetsByGovernorate(govToSearch, options);
+        // Latest-request-wins: ignore responses for an outdated governorate search
+        if (reqSeq !== latestSearchSeqRef.current) {
+          return;
+        }
+        setGovPets(list);
+        setSearchedGov(govToSearch);
+        setAppliedCity(cityVal.trim().toLowerCase());
+        setAppliedType(typeVal);
+        setPage(1);
+        setSavedPets((prev) => reconcileSavedPetsForGov(prev, govToSearch, list));
+      } catch (err) {
+        if (reqSeq !== latestSearchSeqRef.current) {
+          return;
+        }
+        setErrorMsg(err.message || 'Failed to fetch pets.');
+      } finally {
+        if (reqSeq === latestSearchSeqRef.current) {
+          setLoading(false);
+        }
       }
-    }
-  }
+    },
+    [t.selectGovPrompt]
+  );
 
   // When a pet is added in ShareView, preselect its governorate, render the new report immediately, and refresh with &fresh=1
   useEffect(() => {
     if (!petAddedEvent || !petAddedEvent.gov) return;
     setSavedOnly(false);
     setSelectedGov(petAddedEvent.gov);
-    runSearchForGov(petAddedEvent.gov, cityInput, typeInput, {
-      renderImmediate: true
-    });
-  }, [petAddedEvent]);
+    runSearchForGov(
+      petAddedEvent.gov,
+      filterStateRef.current.cityInput,
+      filterStateRef.current.typeInput,
+      { renderImmediate: true }
+    );
+  }, [petAddedEvent, runSearchForGov]);
 
   // Respond when user clicks "Save & adopt a pet" while already on this tab
   useEffect(() => {
     if (adoptTrigger === 0) return;
     if (selectedGov) {
-      runSearchForGov(selectedGov, cityInput, typeInput);
+      runSearchForGov(
+        selectedGov,
+        filterStateRef.current.cityInput,
+        filterStateRef.current.typeInput
+      );
     }
-  }, [adoptTrigger]);
+  }, [adoptTrigger, selectedGov, runSearchForGov]);
 
   function handleGovChange(e) {
     const newGov = e.target.value;
@@ -182,9 +214,13 @@ export default function AdoptView({ lang, adoptTrigger = 0, petAddedEvent = null
     setPage(1);
   }
 
-  function handleToggleSavePet(pet) {
+  const handleToggleSavePet = useCallback((pet) => {
     setSavedPets((prev) => toggleSavedPet(prev, pet));
-  }
+  }, []);
+
+  const handleOpenPoster = useCallback((pet) => {
+    setPosterPet(pet);
+  }, []);
 
   function handleNearMeSort() {
     setErrorMsg('');
@@ -250,75 +286,85 @@ export default function AdoptView({ lang, adoptTrigger = 0, petAddedEvent = null
     await runSearchForGov(selectedGov, cityInput, typeInput, { fresh: true });
   }
 
-  async function handleMarkAdopted(pet) {
-    const pin = getPetPin(pet.id);
-    const prevGovPets = govPets;
-    const prevSavedPets = savedPets;
+  const handleMarkAdopted = useCallback(
+    async (pet) => {
+      const pin = getPetPin(pet.id);
+      const prevGovPets = govPets;
+      const prevSavedPets = savedPets;
 
-    // 1. Optimistically remove from local state and saved bookmarks
-    setErrorMsg('');
-    setGovPets((prev) => prev.filter((item) => item.id !== pet.id));
-    setSavedPets((prev) => removeSavedPetById(prev, pet.id));
+      // 1. Optimistically remove from local state and saved bookmarks
+      setErrorMsg('');
+      setGovPets((prev) => prev.filter((item) => item.id !== pet.id));
+      setSavedPets((prev) => removeSavedPetById(prev, pet.id));
 
-    try {
-      await markPetAdopted(pet.id, pet.gov, pin);
-    } catch (err) {
-      // Roll back optimistic UI change and show error
-      setGovPets(prevGovPets);
-      setSavedPets(prevSavedPets);
-      saveBookmarkedPets(prevSavedPets);
-      if (pet.gov) {
-        saveToClientCache(pet.gov, prevGovPets);
+      try {
+        await markPetAdopted(pet.id, pet.gov, pin);
+      } catch (err) {
+        // Roll back optimistic UI change and show error
+        setGovPets(prevGovPets);
+        setSavedPets(prevSavedPets);
+        saveBookmarkedPets(prevSavedPets);
+        if (pet.gov) {
+          saveToClientCache(pet.gov, prevGovPets);
+        }
+        setErrorMsg((err && err.message) || t.actionFailedError);
+        throw err;
       }
-      setErrorMsg((err && err.message) || t.actionFailedError);
-      throw err;
-    }
-  }
+    },
+    [govPets, savedPets, t.actionFailedError]
+  );
 
   // Choose base source: either the user's saved bookmarks across all governorates, or the loaded governorate list
   const sourcePets = savedOnly ? savedPets : govPets;
 
   // Enrich with distance from userCoords when available
-  const enrichedPets = sourcePets.map((pet) => {
-    const dist = userCoords
-      ? calculateDistanceKm(userCoords.lat, userCoords.lng, pet.lat, pet.lng)
-      : null;
-    return {
-      ...pet,
-      _distanceKm: dist
-    };
-  });
+  const enrichedPets = useMemo(
+    () =>
+      sourcePets.map((pet) => {
+        const dist = userCoords
+          ? calculateDistanceKm(userCoords.lat, userCoords.lng, pet.lat, pet.lng)
+          : null;
+        return {
+          ...pet,
+          _distanceKm: dist
+        };
+      }),
+    [sourcePets, userCoords]
+  );
 
-  // Filter in-browser
-  const filteredPets = enrichedPets.filter((pet) => {
-    if (appliedType && pet.type !== appliedType) {
-      return false;
-    }
-    if (urgentOnly && pet.cond !== 'injured' && pet.cond !== 'sick') {
-      return false;
-    }
-    if (appliedCity) {
-      const petCity = String(pet.city || '').toLowerCase();
-      if (!petCity.includes(appliedCity)) {
+  // Filter and sort in-browser
+  const filteredPets = useMemo(() => {
+    const filtered = enrichedPets.filter((pet) => {
+      if (appliedType && pet.type !== appliedType) {
         return false;
       }
-    }
-    if (userCoords && radiusKm > 0 && typeof pet._distanceKm === 'number') {
-      if (pet._distanceKm > radiusKm) {
+      if (urgentOnly && pet.cond !== 'injured' && pet.cond !== 'sick') {
         return false;
       }
-    }
-    return true;
-  });
-
-  // Sort by closest distance when enabled
-  if (sortByNearest && userCoords) {
-    filteredPets.sort((a, b) => {
-      const dA = typeof a._distanceKm === 'number' ? a._distanceKm : Infinity;
-      const dB = typeof b._distanceKm === 'number' ? b._distanceKm : Infinity;
-      return dA - dB;
+      if (appliedCity) {
+        const petCity = String(pet.city || '').toLowerCase();
+        if (!petCity.includes(appliedCity)) {
+          return false;
+        }
+      }
+      if (userCoords && radiusKm > 0 && typeof pet._distanceKm === 'number') {
+        if (pet._distanceKm > radiusKm) {
+          return false;
+        }
+      }
+      return true;
     });
-  }
+
+    if (sortByNearest && userCoords) {
+      return [...filtered].sort((a, b) => {
+        const dA = typeof a._distanceKm === 'number' ? a._distanceKm : Infinity;
+        const dB = typeof b._distanceKm === 'number' ? b._distanceKm : Infinity;
+        return dA - dB;
+      });
+    }
+
+    return filtered;
+  }, [enrichedPets, appliedType, urgentOnly, appliedCity, userCoords, radiusKm, sortByNearest]);
 
   const visiblePets = filteredPets.slice(0, page * PAGE_SIZE);
   const hasMore = visiblePets.length < filteredPets.length;
@@ -618,16 +664,26 @@ export default function AdoptView({ lang, adoptTrigger = 0, petAddedEvent = null
           </div>
 
           {viewMode === 'map' ? (
-            <PetMapView
-              pets={filteredPets}
-              selectedGov={selectedGov || (filteredPets[0] && filteredPets[0].gov)}
-              userCoords={userCoords}
-              lang={lang}
-              savedIds={savedIds}
-              onToggleSave={handleToggleSavePet}
-              onOpenPoster={(pet) => setPosterPet(pet)}
-              onMarkAdopted={handleMarkAdopted}
-            />
+            <ErrorBoundary lang={lang} onReset={() => setViewMode('list')}>
+              <Suspense
+                fallback={
+                  <div className="surface-card empty-state-box" aria-busy="true">
+                    <p className="empty-state-text">{t.searchingBtn}</p>
+                  </div>
+                }
+              >
+                <PetMapView
+                  pets={filteredPets}
+                  selectedGov={selectedGov || (filteredPets[0] && filteredPets[0].gov)}
+                  userCoords={userCoords}
+                  lang={lang}
+                  savedIds={savedIds}
+                  onToggleSave={handleToggleSavePet}
+                  onOpenPoster={handleOpenPoster}
+                  onMarkAdopted={handleMarkAdopted}
+                />
+              </Suspense>
+            </ErrorBoundary>
           ) : (
             <>
               <div className="cards-list">
@@ -639,7 +695,7 @@ export default function AdoptView({ lang, adoptTrigger = 0, petAddedEvent = null
                     distanceKm={pet._distanceKm}
                     isSaved={savedIds.has(pet.id)}
                     onToggleSave={handleToggleSavePet}
-                    onOpenPoster={(p) => setPosterPet(p)}
+                    onOpenPoster={handleOpenPoster}
                     onMarkAdopted={handleMarkAdopted}
                   />
                 ))}
@@ -662,11 +718,23 @@ export default function AdoptView({ lang, adoptTrigger = 0, petAddedEvent = null
       )}
 
       {posterPet && (
-        <RescuePosterModal
-          pet={posterPet}
-          lang={lang}
-          onClose={() => setPosterPet(null)}
-        />
+        <ErrorBoundary lang={lang} onReset={() => setPosterPet(null)}>
+          <Suspense
+            fallback={
+              <div className="modal-backdrop" role="status" aria-busy="true">
+                <div className="surface-card modal-box poster-modal-box">
+                  <p className="empty-state-text">{t.searchingBtn}</p>
+                </div>
+              </div>
+            }
+          >
+            <RescuePosterModal
+              pet={posterPet}
+              lang={lang}
+              onClose={() => setPosterPet(null)}
+            />
+          </Suspense>
+        </ErrorBoundary>
       )}
     </div>
   );

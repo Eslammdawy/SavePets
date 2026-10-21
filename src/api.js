@@ -586,10 +586,21 @@ export async function reportPetAdopted(petId, gov = '') {
 }
 
 /**
- * Build Google Drive thumbnail URL from photo_id.
- * Never returns or uses base64 from the backend.
+ * Build proxied image URL (`/api/img?id=...`) from Drive `photo_id`.
+ * In local dev without edge functions (`import.meta.env.DEV` with `VITE_GAS_URL`), falls back to direct Drive thumbnail URL.
  */
 export function getDrivePhotoUrl(photoId) {
+  if (!photoId) return '';
+  if (getDevGasUrl()) {
+    return getDirectDrivePhotoUrl(photoId);
+  }
+  return `/api/img?id=${encodeURIComponent(photoId)}`;
+}
+
+/**
+ * Direct Google Drive thumbnail URL used as `onError` fallback in `PetCard`.
+ */
+export function getDirectDrivePhotoUrl(photoId) {
   if (!photoId) return '';
   return `https://drive.google.com/thumbnail?id=${encodeURIComponent(photoId)}&sz=w400`;
 }

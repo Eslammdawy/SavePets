@@ -157,6 +157,10 @@ export const DICT = {
     mapLegendHealthy: 'سليم للتبني',
     mapLegendYou: 'موقعك الحالي',
     mapClickPinHint: 'اضغط على أي علامة على الخريطة لعرض تفاصيل الحيوان والتواصل.',
+    mapLoadError: 'تعذر تحميل الخريطة التفاعلية حالياً (تأكد من الاتصال بالإنترنت). يمكنك استعراض الحالات بالأسفل.',
+    errorBoundaryTitle: 'حدث خطأ غير متوقع في عرض هذا الجزء',
+    errorBoundaryText: 'يرجى المحاولة مرة أخرى.',
+    errorBoundaryRetryBtn: 'إعادة المحاولة',
 
     // 4. Emergency First-Aid & Shelter Directory
     firstAidHeaderBtn: 'الإسعافات والملاجئ',
@@ -349,6 +353,10 @@ export const DICT = {
     mapLegendHealthy: 'Healthy / For Adoption',
     mapLegendYou: 'Your Location',
     mapClickPinHint: 'Tap any pin on the map to inspect the animal and get directions.',
+    mapLoadError: 'Could not load the interactive map (check your connection). You can still browse cases below.',
+    errorBoundaryTitle: 'Something went wrong displaying this section',
+    errorBoundaryText: 'Please try again.',
+    errorBoundaryRetryBtn: 'Try again',
 
     // 4. Emergency First-Aid & Shelter Directory
     firstAidHeaderBtn: 'First-Aid & Shelters',
@@ -391,7 +399,11 @@ export const DICT = {
  */
 export function formatTimeAgo(epochSec, lang = 'ar') {
   const nowSec = Math.floor(Date.now() / 1000);
-  const raw = Number(epochSec || nowSec);
+  let raw = Number(epochSec || nowSec);
+  if (!Number.isFinite(raw)) {
+    const parsedMs = Date.parse(String(epochSec));
+    raw = Number.isFinite(parsedMs) ? parsedMs : nowSec;
+  }
   const targetSec = raw > 1e11 ? Math.floor(raw / 1000) : raw;
   const diffSec = Math.max(0, nowSec - targetSec);
   const mins = Math.floor(diffSec / 60);
@@ -469,4 +481,61 @@ export function buildWhatsAppUrl(pet, lang = 'ar', contactDigits = '') {
       : `Hello! I saw your Street Pets report about the ${typeLabel.toLowerCase()} in ${hasDistinctCity ? `${cityText} (${govName})` : govName} and would like to help rescue/adopt it.`;
 
   return `https://wa.me/${digits}?text=${encodeURIComponent(message)}`;
+}
+
+/**
+ * Build shareable text summary + Google Maps link for a pet report.
+ */
+export function buildShareText(pet, lang = 'ar') {
+  const summary = buildAutoSummary(pet, lang);
+  const mapsUrl = `https://www.google.com/maps?q=${encodeURIComponent(`${pet.lat},${pet.lng}`)}`;
+  const desc = String(pet.desc || '').trim();
+
+  if (lang === 'ar') {
+    return [
+      `🐾 نداء إنقاذ عبر تطبيق Street Pets Egypt`,
+      summary,
+      desc ? `📝 التفاصيل: ${desc}` : '',
+      `📍 الموقع على الخريطة: ${mapsUrl}`
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  return [
+    `🐾 Street Pets Egypt — Rescue Alert`,
+    summary,
+    desc ? `📝 Details: ${desc}` : '',
+    `📍 Exact GPS Location: ${mapsUrl}`
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+/**
+ * Trigger native Web Share API or copy to clipboard as fallback.
+ */
+export async function sharePetCaseNative(pet, lang = 'ar') {
+  const text = buildShareText(pet, lang);
+  const mapsUrl = `https://www.google.com/maps?q=${encodeURIComponent(`${pet.lat},${pet.lng}`)}`;
+
+  if (typeof navigator !== 'undefined' && navigator.share) {
+    try {
+      await navigator.share({
+        title: 'Street Pets Egypt',
+        text,
+        url: mapsUrl
+      });
+      return { shared: true, copied: false };
+    } catch (_err) {
+      // User cancelled or share failed; fall back to clipboard
+    }
+  }
+
+  if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+    await navigator.clipboard.writeText(text);
+    return { shared: false, copied: true };
+  }
+
+  return { shared: false, copied: false };
 }

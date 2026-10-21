@@ -214,6 +214,50 @@ function getScriptProp_(key) {
 }
 
 /**
+ * Ensures FOLDER_ID is configured; auto-creates a public Drive folder if missing.
+ */
+function getOrCreateFolderId_() {
+  const props = PropertiesService.getScriptProperties();
+  let folderId = String((props && props.getProperty('FOLDER_ID')) || '').trim();
+  if (folderId) {
+    return folderId;
+  }
+  try {
+    const folder = DriveApp.createFolder('Street Pets Photos');
+    folder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    folderId = folder.getId();
+    if (props) {
+      props.setProperty('FOLDER_ID', folderId);
+    }
+    return folderId;
+  } catch (err) {
+    logError_('ERR_AUTO_FOLDER', 'getOrCreateFolderId_', 'Failed to auto-create photo folder: ' + err.message);
+    return '';
+  }
+}
+
+/**
+ * Ensures PIN_SALT is configured; auto-generates a secure random salt if missing.
+ */
+function getOrCreatePinSalt_() {
+  const props = PropertiesService.getScriptProperties();
+  let pinSalt = String((props && props.getProperty('PIN_SALT')) || '').trim();
+  if (pinSalt) {
+    return pinSalt;
+  }
+  try {
+    pinSalt = Utilities.getUuid() + '-' + Utilities.getUuid();
+    if (props) {
+      props.setProperty('PIN_SALT', pinSalt);
+    }
+    return pinSalt;
+  } catch (err) {
+    logError_('ERR_AUTO_PIN_SALT', 'getOrCreatePinSalt_', 'Failed to auto-generate PIN_SALT: ' + err.message);
+    return '';
+  }
+}
+
+/**
  * Constant-time string comparison for secrets and hashes.
  */
 function timingSafeEqual_(a, b) {
@@ -428,6 +472,12 @@ function setup() {
       .everyMinutes(5)
       .create();
   }
+
+  // Auto-provision Google Drive photo folder and PIN_SALT if not already configured
+  const provisionedFolderId = getOrCreateFolderId_();
+  const provisionedPinSalt = getOrCreatePinSalt_();
+  Logger.log('Photo Folder ID: ' + provisionedFolderId);
+  Logger.log('PIN Salt configured: ' + (provisionedPinSalt ? 'YES' : 'NO'));
 }
 
 /**
@@ -787,9 +837,9 @@ function handleAdd_(data) {
     return jsonResponse_({ ok: false, code: 'ERR_MISSING_IP', error: 'Missing client identifier.' });
   }
 
-  const folderId = getScriptProp_('FOLDER_ID');
+  const folderId = getOrCreateFolderId_();
   if (!folderId) {
-    logError_('ERR_MISSING_FOLDER_ID', 'handleAdd_', 'FOLDER_ID is not set in Script Properties.');
+    logError_('ERR_MISSING_FOLDER_ID', 'handleAdd_', 'FOLDER_ID is not set in Script Properties and auto-creation failed.');
     return jsonResponse_({
       ok: false,
       code: 'ERR_CONFIG',
@@ -797,9 +847,9 @@ function handleAdd_(data) {
     });
   }
 
-  const pinSalt = getScriptProp_('PIN_SALT');
+  const pinSalt = getOrCreatePinSalt_();
   if (!pinSalt) {
-    logError_('ERR_MISSING_PIN_SALT', 'handleAdd_', 'PIN_SALT is not set in Script Properties.');
+    logError_('ERR_MISSING_PIN_SALT', 'handleAdd_', 'PIN_SALT is not set in Script Properties and auto-generation failed.');
     return jsonResponse_({
       ok: false,
       code: 'ERR_CONFIG',
@@ -1002,9 +1052,9 @@ function handleMarkAdopted_(data) {
     return jsonResponse_({ ok: false, code: 'ERR_BAD_PIN', error: 'A valid 4-digit PIN is required.' });
   }
 
-  const pinSalt = getScriptProp_('PIN_SALT');
+  const pinSalt = getOrCreatePinSalt_();
   if (!pinSalt) {
-    logError_('ERR_MISSING_PIN_SALT', 'handleMarkAdopted_', 'PIN_SALT is not set in Script Properties.');
+    logError_('ERR_MISSING_PIN_SALT', 'handleMarkAdopted_', 'PIN_SALT is not set in Script Properties and auto-generation failed.');
     return jsonResponse_({
       ok: false,
       code: 'ERR_CONFIG',

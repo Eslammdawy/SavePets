@@ -63,7 +63,18 @@ export default function ShareView({ lang, onPetAdded, onOpenFirstAid }) {
       const result = await compressImageFile(file);
       setPhotoData(result);
     } catch (err) {
-      setErrorMsg(err.message || 'Failed to process photo.');
+      const code = err && err.code;
+      let msg = (err && err.message) || 'Failed to process photo.';
+      if (code === 'ERR_HEIC_CONVERT' && t.photoHeicError) {
+        msg = t.photoHeicError;
+      } else if (code === 'ERR_IMAGE_LOAD' && t.photoLoadError) {
+        msg = t.photoLoadError;
+      } else if (code === 'ERR_INVALID_FILE' && t.photoInvalidError) {
+        msg = t.photoInvalidError;
+      } else if (code === 'ERR_TOO_LARGE' && t.photoTooLargeError) {
+        msg = t.photoTooLargeError;
+      }
+      setErrorMsg(msg);
       setPhotoData(null);
     } finally {
       setCompressing(false);
@@ -303,7 +314,7 @@ export default function ShareView({ lang, onPetAdded, onOpenFirstAid }) {
                 ref={cameraInputRef}
                 id="pet-camera-input"
                 type="file"
-                accept="image/*"
+                accept="image/*,image/heic,image/heif"
                 capture="environment"
                 className="file-input-hidden"
                 onChange={handleFileChange}
@@ -313,7 +324,7 @@ export default function ShareView({ lang, onPetAdded, onOpenFirstAid }) {
                 ref={fileInputRef}
                 id="pet-photo-input"
                 type="file"
-                accept="image/*"
+                accept="image/*,image/heic,image/heif,.heic,.heif,.jpg,.jpeg,.png,.webp"
                 className="file-input-hidden"
                 onChange={handleFileChange}
               />

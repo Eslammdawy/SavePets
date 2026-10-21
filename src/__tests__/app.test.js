@@ -17,6 +17,11 @@ import {
   flushOfflineQueue,
   MAX_OFFLINE_QUEUE
 } from '../offlineQueue';
+import {
+  computeScaledDimensions,
+  isHeicFile,
+  compressImageFile
+} from '../imageCompress';
 
 // Simple in-memory localStorage mock for Node test environment
 function createLocalStorageMock() {
@@ -227,5 +232,67 @@ describe('offlineQueue', () => {
 
     discardFailedOfflineReport(failed[0].queueId);
     expect(getFailedOfflineReports()).toHaveLength(0);
+  });
+});
+
+describe('imageCompress utilities', () => {
+  it('correctly calculates scaled dimensions within max bounds', () => {
+    // Already within bounds
+    expect(computeScaledDimensions(400, 300, 800)).toEqual({ width: 400, height: 300 });
+
+    // Landscape image scaled down
+    expect(computeScaledDimensions(1600, 1200, 800)).toEqual({ width: 800, height: 600 });
+
+    // Portrait image scaled down
+    expect(computeScaledDimensions(1200, 1600, 800)).toEqual({ width: 600, height: 800 });
+
+    // Square image
+    expect(computeScaledDimensions(1000, 1000, 700)).toEqual({ width: 700, height: 700 });
+  });
+
+  it('detects HEIC/HEIF files by MIME, extension, and header bytes', async () => {
+    expect(await isHeicFile({ name: 'cat.heic', type: '' })).toBe(true);
+    expect(await isHeicFile({ name: 'cat.HEIF', type: '' })).toBe(true);
+    expect(await isHeicFile({ name: 'cat.jpg', type: 'image/heic' })).toBe(true);
+    expect(await isHeicFile({ name: 'cat.png', type: 'image/png' })).toBe(false);
+
+    // Mock file with ISOBMFF ftypheic container in header
+    const mockHeicBuffer = new Uint8Array(32);
+    // bytes 4-7: "ftyp"
+    mockHeicBuffer.set([0x66, 0x74, 0x79, 0x70], 4);
+    // bytes 8-11: "heic"
+    mockHeicBuffer.set([0x68, 0x65, 0x69, 0x63], 8);
+
+    const mockHeicBlob = {
+      name: 'IMG_4567',
+      type: 'application/octet-stream',
+      slice: () => ({
+        arrayBuffer: async () => mockHeicBuffer.buffer
+      })
+    };
+    expect(await isHeicFile(mockHeicBlob)).toBe(true);
+
+    const mockJpgBuffer = new Uint8Array(32);
+    mockJpgBuffer.set([0xff, 0xd8, 0xff, 0xe0], 0);
+    const mockJpgBlob = {
+      name: 'IMG_4567',
+      type: 'application/octet-stream',
+      slice: () => ({
+        arrayBuffer: async () => mockJpgBuffer.buffer
+      })
+    };
+    expect(await isHeicFile(mockJpgBlob)).toBe(false);
+  });
+
+  it('rejects invalid or empty files with appropriate error codes', async () => {
+    await expect(compressImageFile(null)).rejects.toMatchObject({
+      code: 'ERR_INVALID_FILE'
+    });
+
+    await expect(
+      compressImageFile({ name: 'document.pdf', type: 'application/pdf' })
+    ).rejects.toMatchObject({
+      code: 'ERR_INVALID_FILE'
+    });
   });
 });

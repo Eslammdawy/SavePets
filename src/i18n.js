@@ -56,6 +56,10 @@ export const DICT = {
       `الرقم السري لبلاغك هو ${pin}. احتفظ به لإغلاق البلاغ عند إنقاذ الحيوان أو تبنيه (تم حفظه تلقائياً على هذا الجهاز).`,
     validationRequired: 'يرجى إضافة صورة الحيوان واختيار المحافظة.',
     validationContact: 'يرجى إدخال رقم واتساب صحيح مع كود الدولة (8 إلى 15 رقماً).',
+    photoLoadError: 'تعذر تحميل الصورة. قد تكون صيغة الملف غير مدعومة أو تالفة. يرجى اختيار صورة بصيغة JPG أو PNG أو WebP.',
+    photoHeicError: 'تعذر تحويل صورة HEIC تلقائياً. يرجى اختيار صورة بصيغة JPG أو PNG، أو إيقاف ميزة High Efficiency في إعدادات الكاميرا.',
+    photoInvalidError: 'ملف غير صالح. يرجى اختيار ملف صورة.',
+    photoTooLargeError: 'حجم الصورة بعد الضغط يتجاوز الحد الأقصى المسموح به (300 كيلوبايت).',
 
     // Animal types
     types: {
@@ -259,6 +263,10 @@ export const DICT = {
       `Your report PIN is ${pin}. Save this code to close the case once rescued (also saved on this device).`,
     validationRequired: 'Photo and governorate are required.',
     validationContact: 'Please enter a valid WhatsApp number with country code (8–15 digits).',
+    photoLoadError: 'Failed to load image. The photo format might not be supported or the file is corrupted. Please choose a JPG, PNG, or WebP photo.',
+    photoHeicError: 'Could not convert HEIC photo automatically. Please select a JPG or PNG photo, or disable "High Efficiency" mode in your camera settings.',
+    photoInvalidError: 'Invalid image file. Please choose an image.',
+    photoTooLargeError: 'Photo exceeds maximum allowed size (300 KB).',
 
     // Animal types
     types: {

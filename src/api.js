@@ -205,6 +205,7 @@ export function expandCompactResponse(data) {
       obj.lat = null;
       obj.lng = null;
     }
+    obj.status = String(obj.status || 'available').trim().toLowerCase();
     if ('contact' in obj) {
       const digits = String(obj.contact || '').replace(/\D+/g, '');
       if (obj.id && digits) {
@@ -356,6 +357,32 @@ export function removePetFromClientCache(gov, petId) {
     const ts = memEntry ? memEntry.ts : Date.now();
     const updated = current.filter((p) => p.id !== petId);
     saveToClientCache(normGov, updated, ts);
+  }
+}
+
+/**
+ * Update a specific pet's status (e.g. to 'adopted') in the cached governorate list
+ * across both memory and sessionStorage.
+ */
+export function updatePetStatusInClientCache(gov, petId, status = 'adopted') {
+  if (!gov || !petId) return;
+  const normGov = String(gov).trim().toLowerCase();
+  const updateList = (list) =>
+    Array.isArray(list)
+      ? list.map((item) => (item.id === petId ? { ...item, status } : item))
+      : list;
+
+  const ownList = recentOwnPetsByGov.get(normGov);
+  if (Array.isArray(ownList)) {
+    recentOwnPetsByGov.set(normGov, updateList(ownList));
+  }
+  const current =
+    getFreshCachedList(normGov) ||
+    (memoryCache.get(normGov) && memoryCache.get(normGov).items);
+  if (Array.isArray(current)) {
+    const memEntry = memoryCache.get(normGov);
+    const ts = memEntry ? memEntry.ts : Date.now();
+    saveToClientCache(normGov, updateList(current), ts);
   }
 }
 
@@ -523,7 +550,8 @@ export function buildPetFromSubmission(payload, response) {
     cond: String((payload && payload.cond) || 'unsure').trim().toLowerCase(),
     desc: String((payload && payload.desc) || '').trim().slice(0, 300),
     photo,
-    hc: Boolean(String((payload && payload.contact) || '').replace(/\D+/g, ''))
+    hc: Boolean(String((payload && payload.contact) || '').replace(/\D+/g, '')),
+    status: 'available'
   };
 }
 
@@ -630,7 +658,7 @@ export async function markPetAdopted(petId, gov, pin = '') {
 
   if (gov) {
     const normGov = String(gov).trim().toLowerCase();
-    removePetFromClientCache(normGov, petId);
+    updatePetStatusInClientCache(normGov, petId, 'adopted');
     needsFreshGovs.add(normGov);
   }
 

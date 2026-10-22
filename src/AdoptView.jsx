@@ -47,6 +47,7 @@ export default function AdoptView({ lang, adoptTrigger = 0, petAddedEvent = null
   const [typeInput, setTypeInput] = useState('');
   const [urgentOnly, setUrgentOnly] = useState(false);
   const [savedOnly, setSavedOnly] = useState(false);
+  const [statusFilter, setStatusFilter] = useState('available'); // 'available' | 'adopted' | 'all'
 
   // Near Me / GPS distance sorting & radius filter
   const [userCoords, setUserCoords] = useState(null); // { lat, lng }
@@ -276,6 +277,7 @@ export default function AdoptView({ lang, adoptTrigger = 0, petAddedEvent = null
     setAppliedType('');
     setUrgentOnly(false);
     setSavedOnly(false);
+    setStatusFilter('available');
     setSortByNearest(false);
     setRadiusKm(0);
     setPage(1);
@@ -292,13 +294,24 @@ export default function AdoptView({ lang, adoptTrigger = 0, petAddedEvent = null
       const prevGovPets = govPets;
       const prevSavedPets = savedPets;
 
-      // 1. Optimistically remove from local state and saved bookmarks
+      // 1. Optimistically update status to 'adopted' in local state and bookmarks
       setErrorMsg('');
-      setGovPets((prev) => prev.filter((item) => item.id !== pet.id));
-      setSavedPets((prev) => removeSavedPetById(prev, pet.id));
+      setGovPets((prev) =>
+        prev.map((item) => (item.id === pet.id ? { ...item, status: 'adopted' } : item))
+      );
+      setSavedPets((prev) =>
+        prev.map((item) => (item.id === pet.id ? { ...item, status: 'adopted' } : item))
+      );
 
       try {
         await markPetAdopted(pet.id, pet.gov, pin);
+        if (pet.gov) {
+          const fresh = getFreshCachedList(pet.gov) || prevGovPets;
+          const updated = fresh.map((item) =>
+            item.id === pet.id ? { ...item, status: 'adopted' } : item
+          );
+          saveToClientCache(pet.gov, updated);
+        }
       } catch (err) {
         // Roll back optimistic UI change and show error
         setGovPets(prevGovPets);
@@ -335,6 +348,14 @@ export default function AdoptView({ lang, adoptTrigger = 0, petAddedEvent = null
   // Filter and sort in-browser
   const filteredPets = useMemo(() => {
     const filtered = enrichedPets.filter((pet) => {
+      if (!savedOnly) {
+        if (statusFilter === 'available' && pet.status === 'adopted') {
+          return false;
+        }
+        if (statusFilter === 'adopted' && pet.status !== 'adopted') {
+          return false;
+        }
+      }
       if (appliedType && pet.type !== appliedType) {
         return false;
       }
@@ -364,12 +385,17 @@ export default function AdoptView({ lang, adoptTrigger = 0, petAddedEvent = null
     }
 
     return filtered;
-  }, [enrichedPets, appliedType, urgentOnly, appliedCity, userCoords, radiusKm, sortByNearest]);
+  }, [enrichedPets, statusFilter, savedOnly, appliedType, urgentOnly, appliedCity, userCoords, radiusKm, sortByNearest]);
+
+  const adoptedCount = useMemo(
+    () => govPets.filter((p) => p.status === 'adopted').length,
+    [govPets]
+  );
 
   const visiblePets = filteredPets.slice(0, page * PAGE_SIZE);
   const hasMore = visiblePets.length < filteredPets.length;
   const hasActiveSubFilters = Boolean(
-    appliedType || appliedCity || urgentOnly || savedOnly || sortByNearest || radiusKm > 0
+    appliedType || appliedCity || urgentOnly || savedOnly || statusFilter === 'adopted' || sortByNearest || radiusKm > 0
   );
 
   const popularGovs = POPULAR_GOV_IDS.map((id) =>
@@ -457,14 +483,29 @@ export default function AdoptView({ lang, adoptTrigger = 0, petAddedEvent = null
             <div className="filter-chips-group" role="group" aria-label={t.filterTypeLabel}>
               <button
                 type="button"
-                className={`filter-chip ${appliedType === '' && !savedOnly ? 'is-active' : ''}`}
+                className={`filter-chip ${appliedType === '' && statusFilter === 'available' && !savedOnly ? 'is-active' : ''}`}
                 onClick={() => {
                   setSavedOnly(false);
+                  setStatusFilter('available');
                   handleTypeChipSelect('');
                 }}
               >
                 <span aria-hidden="true">🐾</span>
                 <span>{t.filterAllTypes}</span>
+              </button>
+
+              <button
+                type="button"
+                className={`filter-chip chip-adopted ${statusFilter === 'adopted' && !savedOnly ? 'is-active' : ''}`}
+                onClick={() => {
+                  setSavedOnly(false);
+                  setStatusFilter((prev) => (prev === 'adopted' ? 'available' : 'adopted'));
+                  setPage(1);
+                }}
+                aria-pressed={statusFilter === 'adopted'}
+              >
+                <span aria-hidden="true">🎉</span>
+                <span>{t.filterStatusAdopted}</span>
               </button>
 
               <button
@@ -626,6 +667,13 @@ export default function AdoptView({ lang, adoptTrigger = 0, petAddedEvent = null
         </div>
       ) : (
         <>
+          {adoptedCount > 0 && !savedOnly && (
+            <div className="progress-milestone-banner" role="status">
+              <span aria-hidden="true">🎉</span>
+              <span>{t.adoptedMilestone(adoptedCount)}</span>
+            </div>
+          )}
+
           <div className="results-toolbar">
             <div className="results-toolbar-left">
               <span className="showing-count">

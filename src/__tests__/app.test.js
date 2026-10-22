@@ -7,7 +7,13 @@ import {
   hasValidCoords
 } from '../governorates';
 import { formatTimeAgo, buildPetMapsUrl } from '../i18n';
-import { buildPetFromSubmission } from '../api';
+import {
+  buildPetFromSubmission,
+  expandCompactResponse,
+  updatePetStatusInClientCache,
+  getFreshCachedList,
+  saveToClientCache
+} from '../api';
 import { safeText, fromSafeText } from '../sanitize';
 import {
   enqueueOfflineReport,
@@ -106,7 +112,49 @@ describe('governorates utilities', () => {
     );
     expect(gpsPet.lat).toBeCloseTo(29.9602, 4);
     expect(gpsPet.lng).toBeCloseTo(31.2569, 4);
+    expect(gpsPet.status).toBe('available');
     expect(buildPetMapsUrl(gpsPet, 'en')).toContain(encodeURIComponent('29.9602,31.2569'));
+  });
+
+  it('unpacks compact list responses and preserves status with fallback to available', () => {
+    const compactPayload = {
+      ok: true,
+      h: ['id', 't', 'gov', 'city', 'lat', 'lng', 'type', 'cond', 'desc', 'photo', 'hc', 'status'],
+      r: [
+        ['pet-1', 1700000000, 'cairo', 'Maadi', 29.96, 31.25, 'cat', 'healthy', 'Orange cat', 'p1', true, 'available'],
+        ['pet-2', 1700000001, 'cairo', 'Zamalek', null, null, 'dog', 'injured', 'Rescued dog', 'p2', false, 'adopted']
+      ]
+    };
+
+    const unpacked = expandCompactResponse(compactPayload);
+    expect(unpacked).toHaveLength(2);
+    expect(unpacked[0].id).toBe('pet-1');
+    expect(unpacked[0].status).toBe('available');
+    expect(unpacked[1].id).toBe('pet-2');
+    expect(unpacked[1].status).toBe('adopted');
+
+    // Legacy response without status header defaults to available
+    const legacyPayload = {
+      ok: true,
+      h: ['id', 't', 'gov', 'city', 'lat', 'lng', 'type', 'cond', 'desc', 'photo', 'hc'],
+      r: [['pet-legacy', 1700000002, 'alexandria', 'Smouha', null, null, 'cat', 'unsure', 'Desc', 'p3', false]]
+    };
+    const legacyUnpacked = expandCompactResponse(legacyPayload);
+    expect(legacyUnpacked[0].status).toBe('available');
+  });
+
+  it('updates pet status in client cache upon adoption', () => {
+    const initialList = [
+      { id: 'pet-test-1', gov: 'cairo', status: 'available' },
+      { id: 'pet-test-2', gov: 'cairo', status: 'available' }
+    ];
+    saveToClientCache('cairo', initialList);
+
+    updatePetStatusInClientCache('cairo', 'pet-test-1', 'adopted');
+    const cached = getFreshCachedList('cairo');
+    expect(cached).toBeTruthy();
+    expect(cached.find((p) => p.id === 'pet-test-1').status).toBe('adopted');
+    expect(cached.find((p) => p.id === 'pet-test-2').status).toBe('available');
   });
 });
 

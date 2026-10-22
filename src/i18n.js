@@ -86,6 +86,9 @@ export const DICT = {
     filterTypeLabel: 'النوع والحالة',
     filterAllTypes: 'الكل',
     filterUrgentOnly: 'حالات حرجة فقط',
+    filterStatusNeedsRescue: 'في حاجة للإنقاذ',
+    filterStatusAdopted: 'تم إنقاذها 🎉',
+    filterStatusAll: 'جميع الحالات',
     searchBtn: 'تحديث النتائج',
     searchingBtn: 'جاري التحميل...',
     selectGovPromptTitle: 'ابدأ باختيار المحافظة',
@@ -95,6 +98,8 @@ export const DICT = {
     resetFiltersBtn: 'إعادة ضبط الفلاتر',
     loadMoreBtn: 'عرض المزيد من البلاغات',
     showingCount: (shown, total) => `عرض ${shown} من أصل ${total} بلاغ`,
+    adoptedMilestone: (count) =>
+      `🎉 تم بحمد الله إنقاذ وتبني ${count} ${count === 1 ? 'حالة' : 'حالات'} في هذه المنطقة!`,
 
     // Pet Card
     cardTitleNeedsHelp: (type) => `${type} يحتاج للمساعدة والإنقاذ`,
@@ -116,6 +121,8 @@ export const DICT = {
     actionFailedError: 'تعذر تنفيذ العملية حالياً. يرجى المحاولة لاحقاً.',
     confirmYes: 'نعم، تأكيد',
     confirmCancel: 'إلغاء',
+    adoptedBadge: 'تم الإنقاذ والتبني 🎉',
+    adoptedCaseClosed: 'تم إنقاذ هذه الحالة وإغلاق البلاغ بنجاح 🎉',
 
     // Pet Card Comments & Follow-ups
     commentsTitle: 'المتابعات والتعليقات على المكان',
@@ -293,6 +300,9 @@ export const DICT = {
     filterTypeLabel: 'Quick Filters',
     filterAllTypes: 'All Pets',
     filterUrgentOnly: 'Urgent Cases Only',
+    filterStatusNeedsRescue: 'Needs Rescue',
+    filterStatusAdopted: 'Rescued 🎉',
+    filterStatusAll: 'All Cases',
     searchBtn: 'Refresh Results',
     searchingBtn: 'Loading...',
     selectGovPromptTitle: 'Select a governorate to start',
@@ -302,6 +312,10 @@ export const DICT = {
     resetFiltersBtn: 'Reset filters',
     loadMoreBtn: 'Load more pets',
     showingCount: (shown, total) => `Showing ${shown} of ${total} reports`,
+    adoptedMilestone: (count) =>
+      count === 1
+        ? '🎉 1 street pet successfully rescued and adopted in this area!'
+        : `🎉 ${count} street pets successfully rescued and adopted in this area!`,
 
     // Pet Card
     cardTitleNeedsHelp: (type) => `${type} needs rescue & care`,
@@ -323,6 +337,8 @@ export const DICT = {
     actionFailedError: 'Action could not be completed. Please try again.',
     confirmYes: 'Yes, confirm',
     confirmCancel: 'Cancel',
+    adoptedBadge: 'Rescued & Adopted 🎉',
+    adoptedCaseClosed: 'This pet was successfully rescued & adopted! 🎉',
 
     // Pet Card Comments & Follow-ups
     commentsTitle: 'Follow-ups & Landmark Comments',

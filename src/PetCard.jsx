@@ -122,7 +122,8 @@ function PetCard({
   const condLabel = t.conditions[condKey] || condKey;
   const condIcon = CONDITION_ICONS[condKey] || '🐾';
   const condClass = `cond-${condKey}`;
-  const isUrgent = condKey === 'injured' || condKey === 'sick';
+  const isAdopted = pet.status === 'adopted';
+  const isUrgent = !isAdopted && (condKey === 'injured' || condKey === 'sick');
 
   const primaryPhotoUrl = getDrivePhotoUrl(pet.photo);
   const fallbackPhotoUrl = getDirectDrivePhotoUrl(pet.photo);
@@ -134,8 +135,9 @@ function PetCard({
   const mapsUrl = buildPetMapsUrl(pet, lang);
   const hasContact = Boolean(pet.hc);
 
-  const cardHeadline =
-    condKey === 'healthy'
+  const cardHeadline = isAdopted
+    ? `${typeLabel} — ${t.adoptedBadge}`
+    : condKey === 'healthy'
       ? t.cardTitleAdopt(typeLabel)
       : t.cardTitleNeedsHelp(typeLabel);
 
@@ -232,7 +234,7 @@ function PetCard({
   }
 
   return (
-    <article className={`surface-card pet-card ${isUrgent ? 'is-urgent-card' : ''}`}>
+    <article className={`surface-card pet-card ${isAdopted ? 'is-adopted' : isUrgent ? 'is-urgent-card' : ''}`}>
       <div className="pet-photo-wrap">
         <div className="pet-photo-placeholder" aria-hidden="true">
           <span className="placeholder-emoji">{typeIcon}</span>
@@ -256,13 +258,20 @@ function PetCard({
           />
         )}
 
-        {/* Top floating badges: Condition + Time Ago + Bookmark */}
+        {/* Top floating badges: Status / Condition + Time Ago + Bookmark */}
         <div className="pet-photo-top-bar">
-          <span className={`cond-badge ${condClass}`}>
-            {isUrgent && <span className="urgent-dot" aria-hidden="true" />}
-            <span aria-hidden="true">{condIcon}</span>
-            <span>{condLabel}</span>
-          </span>
+          {isAdopted ? (
+            <span className="pet-adopted-badge">
+              <span aria-hidden="true">🎉</span>
+              <span>{t.adoptedBadge}</span>
+            </span>
+          ) : (
+            <span className={`cond-badge ${condClass}`}>
+              {isUrgent && <span className="urgent-dot" aria-hidden="true" />}
+              <span aria-hidden="true">{condIcon}</span>
+              <span>{condLabel}</span>
+            </span>
+          )}
 
           <div className="pet-top-right-pills">
             <span className="time-pill">
@@ -493,7 +502,7 @@ function PetCard({
         )}
 
         <div className="pet-actions-row">
-          {hasContact && (
+          {!isAdopted && hasContact && (
             <button
               type="button"
               className="action-btn btn-whatsapp"
@@ -539,52 +548,61 @@ function PetCard({
         </div>
 
         <div className="pet-card-footer">
-          {adoptionActionError && (
-            <div className="comment-alert comment-alert-error" role="alert">
-              ⚠️ {adoptionActionError}
+          {isAdopted ? (
+            <div className="pet-adopted-celebration" role="status">
+              <span aria-hidden="true">🎉</span>
+              <span>{t.adoptedCaseClosed}</span>
             </div>
-          )}
-
-          {reportedForReview ? (
-            <div className="comment-alert comment-alert-success" role="status">
-              ✅ {t.reportAdoptedSuccess}
-            </div>
-          ) : !confirming ? (
-            <button
-              type="button"
-              className="btn-adopted"
-              onClick={() => {
-                setAdoptionActionError('');
-                setConfirming(true);
-              }}
-            >
-              <span aria-hidden="true">🏡</span>{' '}
-              {isOwner ? t.markAdoptedBtn : t.reportAdoptedBtn}
-            </button>
           ) : (
-            <div className="confirm-bar">
-              <span className="confirm-text">
-                {isOwner ? t.confirmAdoptedPrompt : t.confirmReportAdoptedPrompt}
-              </span>
-              <div className="confirm-actions">
+            <>
+              {adoptionActionError && (
+                <div className="comment-alert comment-alert-error" role="alert">
+                  ⚠️ {adoptionActionError}
+                </div>
+              )}
+
+              {reportedForReview ? (
+                <div className="comment-alert comment-alert-success" role="status">
+                  ✅ {t.reportAdoptedSuccess}
+                </div>
+              ) : !confirming ? (
                 <button
                   type="button"
-                  className="btn-confirm-yes"
-                  disabled={submittingAdoptionAction}
-                  onClick={handleConfirmAdoptionAction}
+                  className="btn-adopted"
+                  onClick={() => {
+                    setAdoptionActionError('');
+                    setConfirming(true);
+                  }}
                 >
-                  {t.confirmYes}
+                  <span aria-hidden="true">🏡</span>{' '}
+                  {isOwner ? t.markAdoptedBtn : t.reportAdoptedBtn}
                 </button>
-                <button
-                  type="button"
-                  className="btn-confirm-cancel"
-                  disabled={submittingAdoptionAction}
-                  onClick={() => setConfirming(false)}
-                >
-                  {t.confirmCancel}
-                </button>
-              </div>
-            </div>
+              ) : (
+                <div className="confirm-bar">
+                  <span className="confirm-text">
+                    {isOwner ? t.confirmAdoptedPrompt : t.confirmReportAdoptedPrompt}
+                  </span>
+                  <div className="confirm-actions">
+                    <button
+                      type="button"
+                      className="btn-confirm-yes"
+                      disabled={submittingAdoptionAction}
+                      onClick={handleConfirmAdoptionAction}
+                    >
+                      {t.confirmYes}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-confirm-cancel"
+                      disabled={submittingAdoptionAction}
+                      onClick={() => setConfirming(false)}
+                    >
+                      {t.confirmCancel}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>

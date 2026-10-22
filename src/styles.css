@@ -1062,6 +1062,18 @@ a.action-btn.btn-maps:hover {
   color: #ffffff;
 }
 
+.filter-chip.chip-adopted {
+  border-color: #a7f3d0;
+  color: #065f46;
+  background: #f0fdf4;
+}
+
+.filter-chip.chip-adopted.is-active {
+  background: #059669;
+  border-color: #059669;
+  color: #ffffff;
+}
+
 .btn-refresh-inline {
   min-height: 40px;
   padding: 6px 14px;
@@ -1298,6 +1310,56 @@ a.action-btn.btn-maps:hover {
   background: var(--badge-unsure-bg);
   border: 1px solid var(--badge-unsure-border);
   color: var(--badge-unsure-text);
+}
+
+.pet-adopted-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  background: #d1fae5;
+  border: 1px solid #6ee7b7;
+  color: #065f46;
+  box-shadow: 0 1px 4px rgba(6, 95, 70, 0.12);
+}
+
+.pet-card.is-adopted {
+  border-color: #a7f3d0;
+  background: linear-gradient(180deg, #ffffff 0%, #f0fdf4 100%);
+}
+
+.pet-adopted-celebration {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  color: #065f46;
+  font-weight: 800;
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+.progress-milestone-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
+  border: 1px solid #a7f3d0;
+  border-radius: 14px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  color: #065f46;
+  font-weight: 800;
+  font-size: 0.92rem;
+  box-shadow: 0 2px 8px rgba(5, 150, 105, 0.08);
 }
 
 /* Pet Card Body */
@@ -2473,6 +2535,11 @@ a.action-btn.btn-maps:hover {
 .sp-map-pin.pin-healthy {
   border-color: #16a34a;
   background: #f0fdf4;
+}
+
+.sp-map-pin.pin-adopted {
+  border-color: #059669;
+  background: #d1fae5;
 }
 
 .sp-map-pin.pin-user {

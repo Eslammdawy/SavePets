@@ -244,3 +244,11 @@ The application is engineered with extreme performance and quota discipline:
   - Added `edge-functions/api/img.js` (`/api/img?id=<photo_id>&sz=w400`) with 30-day immutable edge caching and `Access-Control-Allow-Origin: *`, enabling `src/RescuePosterModal.jsx` to render real pet photos onto the HTML5 Canvas without Drive CORS failures.
 - **Code Splitting, Error Boundary, Service Worker & CI**:
   - Lazy-loaded `PetMapView`, `RescuePosterModal`, and `FirstAidModal` via `React.lazy` + `<Suspense>`, wrapped views in `src/ErrorBoundary.jsx`, implemented `createImageBitmap` downscaling in `src/imageCompress.js`, registered `public/sw.js` for app-shell and `/api/img` caching, and added ESLint, Prettier, Vitest unit tests (`src/__tests__/app.test.js`), and GitHub Actions CI (`.github/workflows/ci.yml`).
+
+#### 4. Adoption Progress & Success Stories Showcase (Phase 4)
+- **Safe Adoption Progress & Retained PIN Protection**:
+  - Retained salted PIN verification on `markAdopted` so only the verified rescuer/creator can resolve cases.
+  - Added `'status'` to `COMPACT_HEADERS` and updated `Code.gs` to cache both active (`available`) and adopted pets, with a 30-day grace period in `archiveOld()` before archiving to keep photos and records accessible.
+  - Added "Needs Rescue" (default) and "Rescued 🎉" status filter chips in `src/AdoptView.jsx`, along with a localized celebratory milestone banner (`adoptedMilestone`) showing total rescued cases per governorate.
+  - Enhanced `src/PetCard.jsx` to render an emerald `pet-adopted-badge`, celebratory resolution footer, and disabled contact action for adopted cases.
+  - Styled celebratory `🎉` pins (`pin-adopted`) in `src/PetMapView.jsx` and added unit test coverage in `src/__tests__/app.test.js`.

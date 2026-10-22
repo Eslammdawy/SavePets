@@ -53,7 +53,9 @@ function loadLeafletAssets() {
   });
 }
 
-function getPinColorClass(cond) {
+function getPinColorClass(pet) {
+  if (pet && pet.status === 'adopted') return 'pin-adopted';
+  const cond = (pet && pet.cond) || 'unsure';
   if (cond === 'injured' || cond === 'sick') return 'pin-urgent';
   if (cond === 'pregnant') return 'pin-pregnant';
   if (cond === 'healthy') return 'pin-healthy';
@@ -61,8 +63,9 @@ function getPinColorClass(cond) {
 }
 
 function buildPetDivIcon(L, pet, isSelected) {
-  const emoji = pet.type === 'cat' ? '🐈' : '🐕';
-  const colorClass = getPinColorClass(pet.cond);
+  const isAdopted = pet && pet.status === 'adopted';
+  const emoji = isAdopted ? '🎉' : pet.type === 'cat' ? '🐈' : '🐕';
+  const colorClass = getPinColorClass(pet);
   return L.divIcon({
     className: 'sp-map-div-icon',
     html: `<div class="sp-map-pin ${colorClass} ${isSelected ? 'is-selected-pin' : ''}"><span>${emoji}</span></div>`,
